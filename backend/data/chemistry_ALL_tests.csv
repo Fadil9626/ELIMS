@@ -1,0 +1,59 @@
+name,price,unit_symbol,department_name,sample_type_name,is_active
+Calcium,,mmol/L,Chemistry,Serum,True
+Chloride,,mmol/L,Chemistry,Serum,True
+Potassium,,mmol/L,Chemistry,Serum,True
+Sodium,,mmol/L,Chemistry,Serum,True
+Phosphorus,,mmol/L,Chemistry,Serum,True
+Magnesium,,mmol/L,Chemistry,Serum,True
+Bicarbonate,,mmol/L,Chemistry,Serum,True
+Total Cholesterol,,mmol/L,Chemistry,Serum,True
+HDL Cholesterol,,mmol/L,Chemistry,Serum,True
+LDL Cholesterol,,mmol/L,Chemistry,Serum,True
+Triglycerides,,mmol/L,Chemistry,Serum,True
+Fasting Plasma Glucose,,mmol/L,Chemistry,Serum,True
+2-Hour Post Prandial Glucose,,mmol/L,Chemistry,Serum,True
+Random Plasma Glucose,,mmol/L,Chemistry,Serum,True
+GTT - Fasting,,mmol/L,Chemistry,Serum,True
+GTT - 2 Hour,,mmol/L,Chemistry,Serum,True
+HbA1c,,%,Chemistry,Whole blood,True
+Troponin I,,ng/mL,Chemistry,Serum,True
+Myoglobin,,ng/mL,Chemistry,Serum,True
+CK-MB,,ng/mL,Chemistry,Serum,True
+CK-NAC,,U/L,Chemistry,Serum,True
+LDH,,U/L,Chemistry,Serum,True
+NT-proBNP,,pg/mL,Chemistry,Plasma,True
+TSH,,µIU/mL,Chemistry,Serum,True
+FT3,,pmol/L,Chemistry,Serum,True
+FT4,,pmol/L,Chemistry,Serum,True
+TT4,,nmol/L,Chemistry,Serum,True
+TT3,,nmol/L,Chemistry,Serum,True
+C-Reactive Protein (CRP),,mg/L,Chemistry,Serum,True
+Serum Amyloid A (SAA),,mg/L,Chemistry,Serum,True
+Procalcitonin (PCT),,ng/mL,Chemistry,Serum,True
+Amylase,,IU/L,Chemistry,Serum,True
+Lipase,,U/L,Chemistry,Serum,True
+H. Pylori Antibody (Ab),,RLU,Chemistry,Serum,True
+H. Pylori Antigen (Ag),,RLU,Chemistry,Stool,True
+D-dimer,,mg/L,Chemistry,Plasma,True
+Quantitative HBsAg,,IU/mL,Chemistry,Serum,True
+Creatinine Clearance,,mL/min,Chemistry,Serum,True
+Total PSA,,ng/mL,Chemistry,Serum,True
+Free PSA,,ng/mL,Chemistry,Serum,True
+Carcinoembryonic Antigen (CEA),,ng/mL,Chemistry,Serum,True
+Alpha Fetoprotein (AFP),,ng/mL,Chemistry,Serum,True
+CA 19-9,,U/mL,Chemistry,Serum,True
+CA 15-3,,U/mL,Chemistry,Serum,True
+CA 125,,U/mL,Chemistry,Serum,True
+CA 72-4,,U/mL,Chemistry,Serum,True
+CA 27-29,,U/mL,Chemistry,Serum,True
+Neuron-Specific Enolase (NSE),,ng/mL,Chemistry,Serum,True
+Acid Phosphatase (ACP),,IU/L,Chemistry,Serum,True
+Estradiol (E2),,pg/mL,Chemistry,Serum,True
+Luteinizing Hormone (LH),,mIU/mL,Chemistry,Serum,True
+Cortisol,,µg/dL,Chemistry,Serum,True
+Testosterone,,ng/dL,Chemistry,Serum,True
+Prolactin,,ng/mL,Chemistry,Serum,True
+Follicle Stimulating Hormone (FSH),,mIU/mL,Chemistry,Serum,True
+Progesterone,,ng/mL,Chemistry,Serum,True
+Beta-HCG,,IU/L,Chemistry,Serum,True
+Anti-Mullerian Hormone (AMH),,ng/mL,Chemistry,Serum,True

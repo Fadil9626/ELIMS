@@ -1,0 +1,2 @@
+ALTER TABLE patients
+ADD COLUMN lab_id VARCHAR(50) UNIQUE;

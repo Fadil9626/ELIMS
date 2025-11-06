@@ -1,0 +1,107 @@
+analyte_name,range_type,gender,age_min,age_max,unit_symbol,min_value,max_value,symbol_operator,qualitative_value,note
+Calcium,numeric,Any,,,mmol/L,1.75,3.0,,,Newborn
+Calcium,numeric,Any,,,mmol/L,2.15,2.67,,,Adult
+Chloride,numeric,Any,,,mmol/L,96.0,106.0,,,Newborn
+Chloride,numeric,Any,,,mmol/L,90.0,110.0,,,Child
+Chloride,numeric,Any,,,mmol/L,95.0,115.0,,,Adult
+Potassium,numeric,Any,,,mmol/L,4.5,7.2,,,Neonate
+Potassium,numeric,Any,,,mmol/L,4.1,6.2,,,Infant
+Potassium,numeric,Any,,,mmol/L,3.7,5.6,,,Child
+Potassium,numeric,Any,,,mmol/L,3.5,5.3,,,Adult
+Sodium,numeric,Any,,,mmol/L,135.0,155.0,,,
+Phosphorus,numeric,Any,,,mmol/L,1.4,3.0,,,Neonate
+Phosphorus,numeric,Any,,,mmol/L,1.25,2.1,,,Children
+Phosphorus,numeric,Any,,,mmol/L,0.8,1.61,,,Adult
+Magnesium,numeric,Any,,,mmol/L,0.72,2.09,,,Children
+Magnesium,numeric,Any,,,mmol/L,0.66,1.03,,,Adult
+Bicarbonate,numeric,Any,,,mmol/L,20.0,30.0,,,
+Total Cholesterol,numeric,Any,,,mmol/L,,1.8,<=,,Newborn
+Total Cholesterol,numeric,Any,,,mmol/L,,4.4,<,,Child
+Total Cholesterol,numeric,Any,,,mmol/L,,5.17,<=,,Adult
+HDL Cholesterol,numeric,Any,,,mmol/L,1.7,,>,,
+LDL Cholesterol,numeric,Any,,,mmol/L,,3.4,<,,
+Triglycerides,numeric,Male,,,mmol/L,0.68,1.88,,,Adult Male
+Triglycerides,numeric,Female,,,mmol/L,0.46,1.6,,,Adult Female
+Fasting Plasma Glucose,numeric,Any,,,mmol/L,3.8,5.6,,,
+2-Hour Post Prandial Glucose,numeric,Any,,,mmol/L,,7.8,<,,
+Random Plasma Glucose,numeric,Any,,,mmol/L,3.8,11.0,,,
+GTT - Fasting,numeric,Any,,,mmol/L,3.8,5.6,,,Glucose Tolerance Test
+GTT - 2 Hour,numeric,Any,,,mmol/L,,7.8,<,,Glucose Tolerance Test
+HbA1c,numeric,Any,,,%,3.8,6.0,,,
+Troponin I,numeric,Any,,,ng/mL,,1.0,<,,
+Myoglobin,numeric,Any,,,ng/mL,,70.0,<,,
+CK-MB,numeric,Any,,,ng/mL,,5.0,<,,
+CK-NAC,numeric,Male,,,U/L,55.0,170.0,,,
+CK-NAC,numeric,Female,,,U/L,30.0,135.0,,,
+CK-NAC,numeric,Any,,,U/L,68.0,580.0,,,Newborn
+LDH,numeric,Any,,,U/L,225.0,600.0,,,Newborns
+LDH,numeric,Any,,,U/L,120.0,300.0,,,Child
+LDH,numeric,Male,,,U/L,135.0,225.0,,,Adult Male
+LDH,numeric,Female,,,U/L,135.0,214.0,,,Adult Female
+LDH,numeric,Any,,,U/L,,600.0,<=,,Pregnancy
+NT-proBNP,numeric,Any,,,pg/mL,,300.0,<,,
+TSH,numeric,Any,,,µIU/mL,0.4,4.0,,,
+FT3,numeric,Any,,,pmol/L,2.8,7.1,,,
+FT4,numeric,Any,,,pmol/L,10.0,20.0,,,
+TT4,numeric,Any,,,nmol/L,66.0,181.0,,,
+TT3,numeric,Any,,,nmol/L,1.3,3.1,,,
+C-Reactive Protein (CRP),numeric,Any,,,mg/L,,3.0,<,,
+Serum Amyloid A (SAA),numeric,Any,,,mg/L,,10.0,<,,
+Procalcitonin (PCT),numeric,Any,,,ng/mL,,0.1,<,,
+Amylase,numeric,Any,,,IU/L,0.0,90.0,,,
+Lipase,numeric,Any,,,U/L,0.0,160.0,,,
+H. Pylori Antibody (Ab),numeric,Any,,,RLU,,100.0,<,,
+H. Pylori Antigen (Ag),numeric,Any,,,RLU,,100.0,<,,
+D-dimer,numeric,Any,,,mg/L,,0.5,<,,
+Quantitative HBsAg,numeric,Any,,,IU/mL,,100.0,<,,
+Creatinine Clearance,numeric,Male,,,mL/min,97.0,137.0,,,
+Creatinine Clearance,numeric,Female,,,mL/min,88.0,128.0,,,
+Total PSA,numeric,Any,,,ng/mL,0.0,4.0,,,
+Free PSA,numeric,Any,,,ng/mL,0.0,4.0,,,
+Carcinoembryonic Antigen (CEA),numeric,Any,,,ng/mL,,2.9,<=,,Adults (Non-smoker)
+Carcinoembryonic Antigen (CEA),numeric,Any,,,ng/mL,,5.0,<=,,Adults (Smokers)
+Alpha Fetoprotein (AFP),numeric,Any,,,ng/mL,0.0,40.0,,,
+CA 19-9,numeric,Any,,,U/mL,0.0,37.0,,,Adults
+CA 15-3,numeric,Any,,,U/mL,,38.0,<,,Adults
+CA 125,numeric,Any,,,U/mL,0.0,35.0,,,
+CA 72-4,numeric,Any,,,U/mL,0.0,6.9,,,Adults
+CA 27-29,numeric,Any,,,U/mL,0.0,38.0,,,Adults
+Neuron-Specific Enolase (NSE),numeric,Any,,,ng/mL,0.0,12.5,,,Adults
+Acid Phosphatase (ACP),numeric,Any,,,IU/L,0.0,4.0,,,
+Estradiol (E2),numeric,Female,,,pg/mL,,20.0,<,,Childhood (Prepuberty)
+Estradiol (E2),numeric,Female,,,pg/mL,30.0,400.0,,,Reproductive Years
+Estradiol (E2),numeric,Female,,,pg/mL,130.0,500.0,,,Ovulation Phase
+Estradiol (E2),numeric,Female,,,pg/mL,70.0,250.0,,,Luteal Phase
+Estradiol (E2),numeric,Female,,,pg/mL,,20.0,<,,Postmenopausal
+Estradiol (E2),numeric,Male,,,pg/mL,10.0,40.0,,,Adult
+Luteinizing Hormone (LH),numeric,Female,,,mIU/mL,2.4,12.6,,,Follicular phase
+Luteinizing Hormone (LH),numeric,Female,,,mIU/mL,14.0,95.5,,,Ovulation phase
+Luteinizing Hormone (LH),numeric,Female,,,mIU/mL,1.0,11.4,,,Luteal phase
+Luteinizing Hormone (LH),numeric,Female,,,mIU/mL,7.7,58.5,,,Menopausal
+Luteinizing Hormone (LH),numeric,Male,,,mIU/mL,1.7,8.6,,,Adult
+Cortisol,numeric,Any,,,µg/dL,10.0,100.0,,,Newborns
+Cortisol,numeric,Any,,,µg/dL,3.0,30.0,,,Children
+Cortisol,numeric,Any,,,µg/dL,5.0,25.0,,,Adults
+Testosterone,numeric,Female,,,ng/dL,,20.0,<,,Childhood
+Testosterone,numeric,Female,,,ng/dL,15.0,70.0,,,Reproductive Years
+Testosterone,numeric,Female,,,ng/dL,10.0,50.0,,,Postmenopausal
+Testosterone,numeric,Male,,,ng/dL,,20.0,<,,Childhood
+Testosterone,numeric,Male,,,ng/dL,300.0,1000.0,,,Adults
+Testosterone,numeric,Male,,,ng/dL,200.0,800.0,,,Elderly
+Prolactin,numeric,Female,,,ng/mL,4.79,23.3,,,Non-pregnant woman
+Prolactin,numeric,Male,,,ng/mL,4.04,15.2,,,
+Follicle Stimulating Hormone (FSH),numeric,Male,,,mIU/mL,0.97,12.4,,,Mature man
+Follicle Stimulating Hormone (FSH),numeric,Female,,,mIU/mL,3.5,12.5,,,Mature woman - Follicular Phase
+Follicle Stimulating Hormone (FSH),numeric,Female,,,mIU/mL,4.7,21.5,,,Mature woman - Ovulation
+Follicle Stimulating Hormone (FSH),numeric,Female,,,mIU/mL,1.7,7.7,,,Mature woman - Luteal Phase
+Follicle Stimulating Hormone (FSH),numeric,Female,,,mIU/mL,25.8,134.8,,,Menopause
+Progesterone,numeric,Female,,,ng/mL,0.0,12.0,,,Non-pregnant - Ovulation (text shows '<1.40-12.00'; lower bound set to 0)
+Progesterone,numeric,Female,,,ng/mL,1.7,28.7,,,Non-pregnant - Luteal Phase
+Progesterone,numeric,Female,,,ng/mL,10.0,,>=,,Non-pregnant - Mid-Luteal phase
+Progesterone,numeric,Female,,,ng/mL,0.0,2.0,,,After Menopause (<1.00-2.00 given; set 0-2.0)
+Progesterone,numeric,Female,,,ng/mL,10.99,53.0,,,Pregnant - First trimester (1–12 weeks)
+Progesterone,numeric,Female,,,ng/mL,21.5,60.0,,,Pregnant - Second trimester (12–24 weeks)
+Beta-HCG,numeric,Any,,,IU/L,,5.0,<,,
+Anti-Mullerian Hormone (AMH),numeric,Male,,,ng/mL,0.92,13.89,,,Adult Male
+Anti-Mullerian Hormone (AMH),numeric,Female,,,ng/mL,0.88,10.35,,,Healthy woman age 20–29
+Anti-Mullerian Hormone (AMH),numeric,Female,,,ng/mL,0.31,7.86,,,Healthy woman age 30–39

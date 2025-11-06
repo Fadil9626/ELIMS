@@ -1,0 +1,1 @@
+-- Add the new Phlebotomist role-- We'll assign it an ID of 6INSERT INTO roles (id, name) VALUES (6, 'Phlebotomist');-- Add new columns to the test_requests table to track sample collectionALTER TABLE test_requestsADD COLUMN sample_collected_at TIMESTAMPTZ,ADD COLUMN collected_by INTEGER REFERENCES users(id);

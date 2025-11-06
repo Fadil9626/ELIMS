@@ -1,0 +1,1 @@
+-- Insert new keys into the system_settings table for basic laboratory information INSERT INTO system_settings (setting_key, setting_value) VALUES ('lab_name', 'MTD'), ('lab_address', '123 Clinical Drive, Freetown'), ('lab_phone', '+232 12 345 678'), ('lab_email', 'contact@elimslab.com');

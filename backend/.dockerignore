@@ -1,0 +1,7 @@
+# backend/.dockerignore
+
+# Ignore node modules
+node_modules
+
+# CRITICAL: Ignore local environment file
+.env
