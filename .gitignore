@@ -37,4 +37,4 @@ traefik_acme/
 
 # --- CRITICAL: IGNORE BACKUPS & UPLOADS ---
 /backend/backups/
-/backend/uploads/
+/backend/uploads/.env
