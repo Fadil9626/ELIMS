@@ -1,351 +1,150 @@
-// src/context/AuthContext.jsx
-import React, {
-  createContext,
-  useState,
-  useContext,
-  useEffect,
-  useMemo,
-  useCallback,
-} from "react";
-import { useNavigate } from "react-router-dom";
-import toast from "react-hot-toast";
+import React, { createContext, useContext, useEffect, useState } from "react";
 
 const AuthContext = createContext(null);
-
-const decodeJwt = (token) => {
-  try {
-    const payloadBase64 = token.split(".")[1];
-    const json = atob(payloadBase64.replace(/-/g, "+").replace(/_/g, "/"));
-    return JSON.parse(decodeURIComponent(escape(json)));
-  } catch {
-    return null;
-  }
-};
+const STORAGE_KEY = "elims_auth_v1";
 
 export const AuthProvider = ({ children }) => {
-  const navigate = useNavigate();
-
-  // ---- State
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
-  const [loading, setLoading] = useState(true); // initial bootstrap only
+  const [authLoading, setAuthLoading] = useState(true);
 
-  // ---- Bootstrap from localStorage → validate → hydrate /api/me
+  // ---------------------------------------------------------------------------
+  // Load auth from localStorage on first load
+  // ---------------------------------------------------------------------------
   useEffect(() => {
-    const boot = async () => {
-      try {
-        const stored = JSON.parse(localStorage.getItem("userInfo"));
-        const t = stored?.token || stored?.user?.token || null;
-        if (!t) {
-          setUser(null);
-          setToken(null);
-          setLoading(false);
-          return;
-        }
-
-        const payload = decodeJwt(t);
-        const now = Math.floor(Date.now() / 1000);
-        if (!payload || (payload.exp && payload.exp < now)) {
-          localStorage.removeItem("userInfo");
-          setUser(null);
-          setToken(null);
-          setLoading(false);
-          return;
-        }
-
-        setToken(t);
-        const res = await fetch("/api/me", {
-          headers: { Authorization: `Bearer ${t}` },
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const me = await res.json();
-        setUser({ ...me, token: t });
-      } catch {
-        localStorage.removeItem("userInfo");
-        setUser(null);
-        setToken(null);
-      } finally {
-        setLoading(false);
-      }
-    };
-    boot();
-  }, []);
-
-  // ---- Helper: is token valid (returns token or null)
-  const getToken = useCallback(() => {
-    if (!token) return null;
-    const payload = decodeJwt(token);
-    const now = Math.floor(Date.now() / 1000);
-    if (!payload || (payload.exp && payload.exp < now)) {
-      toast.error("⚠️ Session expired. Please log in again.");
-      localStorage.removeItem("userInfo");
-      setUser(null);
-      setToken(null);
-      navigate("/login");
-      return null;
-    }
-    return token;
-  }, [token, navigate]);
-
-  // ---- authedFetch with auto sign-out on 401/419
-  const authedFetch = useCallback(
-    async (url, options = {}) => {
-      const t = getToken();
-      const headers = {
-        ...(options.headers || {}),
-        ...(t ? { Authorization: `Bearer ${t}` } : {}),
-      };
-      const res = await fetch(url, { ...options, headers });
-
-      if (res.status === 401 || res.status === 419) {
-        localStorage.removeItem("userInfo");
-        setUser(null);
-        setToken(null);
-        toast.error("🔒 You’ve been signed out. Please log in again.");
-        navigate("/login");
-        throw new Error("Unauthorized");
-      }
-      return res;
-    },
-    [getToken, navigate]
-  );
-
-  // ---- Login
-  const login = useCallback(
-    async (userData) => {
-      // ✅ FIX: Set context to "loading" *during* the login process
-      setLoading(true); 
-      
-      const t = userData?.token || userData?.user?.token;
-      if (!t) {
-        toast.error("Login failed: missing token.");
-        setLoading(false); // Make sure to stop loading on failure
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        setAuthLoading(false);
         return;
       }
-      localStorage.setItem("userInfo", JSON.stringify({ token: t }));
-      setToken(t);
 
-      try {
-        const res = await fetch("/api/me", {
-          headers: { Authorization: `Bearer ${t}` },
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const me = await res.json();
-        setUser({ ...me, token: t });
-        
-        setTimeout(() => toast.success("✅ Logged in successfully!"), 400);
-        return { ...me, token: t }; // Return user data
-        
-      } catch (err) {
-        localStorage.removeItem("userInfo");
-        setUser(null);
-        setToken(null);
-        toast.error(`Login failed: ${err.message || 'Please try again.'}`);
-        throw err; // Re-throw for LoginPage to catch
-      } finally {
-        // ✅ FIX: Set context loading to false *after* login is complete
-        setLoading(false);
+      const parsed = JSON.parse(raw);
+      if (parsed?.token && parsed?.user) {
+        setToken(parsed.token);
+        setUser(parsed.user);
       }
-    },
-    [] // 'navigate' is removed, 'setLoading' is stable
-  );
-
-  // ---- Logout (optionally confirmed)
-  const logout = useCallback(
-    (showMessage = true, confirm = true) => {
-      const doLogout = () => {
-        localStorage.removeItem("userInfo");
-        setUser(null);
-        setToken(null);
-        navigate("/login");
-        if (showMessage) toast.success("🔒 Logged out successfully.");
-      };
-
-      if (!confirm) return doLogout();
-
-      toast(
-        (t) => (
-          <div className="text-sm">
-            <p>Are you sure you want to log out?</p>
-            <div className="flex justify-end gap-2 mt-3">
-              <button
-                onClick={() => {
-                  toast.dismiss(t.id);
-                  doLogout();
-                }}
-                className="bg-red-500 text-white px-3 py-1 rounded text-xs hover:bg-red-600"
-              >
-                Yes, Logout
-              </button>
-              <button
-                onClick={() => toast.dismiss(t.id)}
-                className="bg-gray-200 px-3 py-1 rounded text-xs hover:bg-gray-300"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        ),
-        { 
-          duration: 8000,
-          position: "bottom-center"
-        }
-      );
-    },
-    [navigate]
-  );
-  
-  // ---- Permission logic (unchanged) ---
-  const hasGlobalAll = useMemo(() => {
-    if (!user) return false;
-    if (user.role_id === 1 || user.role_id === 2) return true; // SA/Admin
-    return !!user.effective_permissions?.__all;
-  }, [user]);
-
-  const can = useCallback(
-    (moduleName, actionName) => {
-      if (!user) return false;
-      if (hasGlobalAll) return true;
-      const m = user.permissions?.[moduleName];
-      return !!(m && m[actionName]);
-    },
-    [user, hasGlobalAll]
-  );
-
-  // ---- Cross-tab sync (unchanged) ---
-  useEffect(() => {
-    const onStorage = (e) => {
-      if (e.key !== "userInfo") return;
-      try {
-        const next = e.newValue ? JSON.parse(e.newValue) : null;
-        const t = next?.token || null;
-        if (!t) {
-          setUser(null);
-          setToken(null);
-          return;
-        }
-        setToken(t);
-        (async () => {
-          try {
-            const res = await fetch("/api/me", {
-              headers: { Authorization: `Bearer ${t}` },
-            });
-            if (!res.ok) throw new Error();
-            const me = await res.json();
-            setUser({ ...me, token: t });
-          } catch {
-            setUser(null);
-            setToken(null);
-          }
-        })();
-      } catch {
-        setUser(null);
-        setToken(null);
-      }
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    } catch (err) {
+      console.error("Error restoring auth:", err);
+      localStorage.removeItem(STORAGE_KEY);
+    } finally {
+      setAuthLoading(false);
+    }
   }, []);
 
-  // ---- Inactivity auto-logout (unchanged) ---
-  useEffect(() => {
-    let inactivityTimer;
-    let warningTimer;
-    let countdownTimer;
-    let toastId = null;
-    let countdownValue = 300; // 5 minutes
+  // ---------------------------------------------------------------------------
+  // LOGIN
+  // Expects backend response: { token, user, permission_slugs[] }
+  // ---------------------------------------------------------------------------
+  const login = async ({ email, password }) => {
+    setAuthLoading(true);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
 
-    const INACTIVITY_LIMIT = 45 * 60 * 1000; // 45 min
-    const WARNING_TIME = 40 * 60 * 1000; // warn at 40 min
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Invalid credentials");
 
-    const clearAll = () => {
-      clearTimeout(inactivityTimer);
-      clearTimeout(warningTimer);
-      clearInterval(countdownTimer);
-      if (toastId) toast.dismiss(toastId);
-      toastId = null;
-    };
+      const permission_slugs =
+        data.permission_slugs ||
+        data.user?.permission_slugs ||
+        [];
 
-    const resetTimers = () => {
-      clearAll();
-      warningTimer = setTimeout(() => {
-        countdownValue = 300;
-        toastId = toast.custom(
-          (t) => {
-            const minutes = Math.floor(countdownValue / 60);
-            const seconds = countdownValue % 60;
-            return (
-              <div
-                className="text-sm bg-white border p-3 rounded shadow cursor-pointer"
-                onClick={() => {
-                  clearAll();
-                  toast.dismiss(t.id);
-                  toast.success("✅ Session extended.");
-                  resetTimers();
-                }}
-              >
-                <p>⚠️ You’ve been inactive for a while.</p>
-                <p>
-                  Logging out in{" "}
-                  <span className="font-bold text-red-600">
-                    {minutes}:{String(seconds).padStart(2, "0")}
-                  </span>
-                </p>
-                <p className="underline text-blue-500 mt-1">
-                  Click here to stay logged in
-                </p>
-              </div>
-            );
-          },
-          { duration: 600000, position: "bottom-center" }
-        );
+      const normalizedUser = {
+        ...data.user,
+        permission_slugs,
+      };
 
-        countdownTimer = setInterval(() => {
-          countdownValue -= 1;
-          if (countdownValue <= 0) {
-            clearAll();
-            toast.error("🔒 You have been logged out due to inactivity.");
-            logout(false, false);
-          }
-        }, 1000);
-      }, WARNING_TIME);
+      setUser(normalizedUser);
+      setToken(data.token);
 
-      inactivityTimer = setTimeout(() => {
-        clearAll();
-        toast.error("🔒 You have been logged out due to inactivity.");
-        logout(false, false);
-      }, INACTIVITY_LIMIT);
-    };
-
-    if (token) {
-      ["mousemove", "keydown", "click", "scroll"].forEach((evt) =>
-        window.addEventListener(evt, resetTimers, { passive: true })
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          token: data.token,
+          user: normalizedUser,
+        })
       );
-      resetTimers();
+
+      return normalizedUser;
+    } catch (err) {
+      console.error("Login error:", err);
+      throw err;
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // LOGOUT
+  // ---------------------------------------------------------------------------
+  const logout = () => {
+    setUser(null);
+    setToken(null);
+    localStorage.removeItem(STORAGE_KEY);
+  };
+
+  // ---------------------------------------------------------------------------
+  // RBAC: can(module, action) → checks permission_slugs
+  // Example slug: "patients:view", "settings:edit"
+  // ---------------------------------------------------------------------------
+  const can = (module, action) => {
+    if (!user) return false;
+
+    const roleName = (user.role_name || user.role || "").toLowerCase();
+    const roleSlug = (user.role_slug || "").toLowerCase();
+
+    // Super Admin bypass
+    if (roleName === "super admin" || roleSlug === "super_admin") {
+      return true;
     }
 
-    return () => {
-      ["mousemove", "keydown", "click", "scroll"].forEach((evt) =>
-        window.removeEventListener(evt, resetTimers)
-      );
-      clearAll();
+    const slugs = user.permission_slugs || [];
+    const base = module?.toLowerCase().trim();
+    if (!base || !Array.isArray(slugs)) return false;
+
+    if (action) {
+      const full = `${base}:${String(action).toLowerCase().trim()}`;
+      if (slugs.includes(full)) return true;
+    }
+
+    if (slugs.includes(base)) return true;
+
+    return false;
+  };
+
+  // ---------------------------------------------------------------------------
+  // ✅ Authenticating Fetch Helper
+  // Automatically attaches Authorization: Bearer <token>
+  // ---------------------------------------------------------------------------
+  const authedFetch = async (url, options = {}) => {
+    const finalOptions = {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        Authorization: token ? `Bearer ${token}` : "",
+        "Content-Type": "application/json",
+      },
     };
-  }, [token, logout]);
-  
-  const value = useMemo(
-    () => ({
-      user,
-      token,
-      loading,
-      login,
-      logout,
-      can,
-      hasGlobalAll, 
-      getToken,
-      authedFetch,
-    }),
-    [user, token, loading, login, logout, can, hasGlobalAll, getToken, authedFetch]
-  );
+
+    return fetch(url, finalOptions);
+  };
+
+  // ---------------------------------------------------------------------------
+  // CONTEXT VALUE
+  // ---------------------------------------------------------------------------
+  const value = {
+    user,
+    token,
+    authLoading,
+    login,
+    logout,
+    can,
+    authedFetch, // ✅ now available everywhere
+  };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

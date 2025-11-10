@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect, useContext, Fragment } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Printer } from "lucide-react";
 import reportService from "../../services/reportService";
@@ -62,7 +62,7 @@ const API_BASE_URL =
 
 /* ---------------------------------------------------------------------- */
 
-const ReportPage = () => {
+const TestReportPage = () => {
   const { id: testRequestId } = useParams();
   const navigate = useNavigate();
   const { settings } = useContext(SettingsContext);
@@ -93,6 +93,7 @@ const ReportPage = () => {
         if (rep.status === "fulfilled") {
           setReportData(rep.value);
         } else {
+          // 💡 FIX: Access reason safely
           throw new Error(rep.reason?.message || "Failed to load report");
         }
 
@@ -117,6 +118,35 @@ const ReportPage = () => {
   if (error) return <div className="p-6 text-red-500">Error: {error}</div>;
   if (!reportData) return <div className="p-6">Report data not found.</div>;
 
+  // 1. Initialize clinical note with main report note (if it exists)
+  let clinicalNote = reportData.clinical_note || '';
+  let analyteNotes = '';
+  
+  // 2. Extract and compile notes from all analytes
+  if (Array.isArray(reportData.items)) {
+    reportData.items.forEach(item => {
+      const rows = Array.isArray(item.analytes) && item.analytes.length > 0
+        ? item.analytes
+        : fallbackRowsFromResultData(item.result_data);
+      
+      rows.forEach(a => {
+        if (a.note && String(a.note).trim() !== '') {
+          // Format the note to include the analyte name
+          analyteNotes += `\n${a.analyte_name || item.test_name}: ${a.note}`;
+        }
+      });
+    });
+  }
+
+  // 3. Combine notes
+  if (analyteNotes) {
+    // Add separator if a main clinical note already exists
+    if (clinicalNote) {
+      clinicalNote += '\n\n--- Individual Item Notes ---';
+    }
+    clinicalNote += analyteNotes;
+  }
+  
   return (
     <>
       {/* --- COMPACT PRINT STYLES --- */}
@@ -130,12 +160,20 @@ const ReportPage = () => {
           .panel-card { page-break-inside: avoid !important; break-inside: avoid-page !important; margin-bottom: 5mm !important; }
           .min-w-full th, .min-w-full td { padding: 4px 8px !important; }
           .space-y-1 p { margin-bottom: 2px !important; line-height: 1.2 !important; }
+          
+          /* 💡 NEW: Ensure signature fields align in print */
+          .signature-grid > div {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+          }
+          .signature-line { width: 90%; border-top: 1px solid #000; padding-top: 2px; text-align: center; }
         }
       `}</style>
 
       <div className="p-6 bg-gray-100 font-sans">
         {/* Top controls */}
-        <div className="flex justify-end items-center mb-6 no-print">
+        <div className className="flex justify-end items-center mb-6 no-print">
           <button
             onClick={() => navigate(-1)}
             className="flex items-center gap-2 bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600 transition mr-4"
@@ -160,7 +198,6 @@ const ReportPage = () => {
           {/* Header */}
           <header className="flex items-center justify-between p-4 border-b-2 border-gray-800 mb-4">
             
-            {/* ✅ FIX: Use 'lab_logo_light' and add API_BASE_URL */}
             {settings.lab_logo_light ? (
               <img
                 src={`${API_BASE_URL}${settings.lab_logo_light}?t=${Date.now()}`}
@@ -184,7 +221,6 @@ const ReportPage = () => {
               </p>
             </div>
 
-            {/* ✅ FIX: Use 'lab_logo_dark' and add API_BASE_URL */}
             {settings.lab_logo_dark ? (
               <img
                 src={`${API_BASE_URL}${settings.lab_logo_dark}?t=${Date.now()}`}
@@ -240,86 +276,66 @@ const ReportPage = () => {
             LABORATORY REPORT
           </h2>
 
-          {/* Results */}
+          {/* Results Table (Combined into a single section) */}
           <section>
             {Array.isArray(reportData.items) && reportData.items.length > 0 ? (
-              reportData.items.map((item, idx) => {
-                
-                // ✅ FIX: Robustly check for the analyte array first.
-                const rows = Array.isArray(item.analytes) && item.analytes.length > 0
-                  ? item.analytes
-                  : fallbackRowsFromResultData(item.result_data);
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full text-sm border-collapse min-w-full">
+                  
+                  {/* Global Table Header (Global Analyte Header) */}
+                  <thead>
+                    <tr className="bg-gray-100">
+                      {/* 💡 FIX: Adjusted widths and order */}
+                      <th className="text-left px-4 py-2 border-b w-[35%]">
+                        Analyte / Test
+                      </th>
+                      <th className="text-left px-4 py-2 border-b w-[15%]">
+                        Result
+                      </th>
+                      <th className="text-left px-4 py-2 border-b w-[10%]">
+                        Unit
+                      </th>
+                      <th className="text-left px-4 py-2 border-b w-[10%]">
+                        Flag
+                      </th>
+                      <th className="text-left px-4 py-2 border-b w-[30%]">
+                        Reference Range
+                      </th>
+                      {/* Note column remains removed */}
+                    </tr>
+                  </thead>
+                  
+                  <tbody>
+                    {reportData.items.map((item, idx) => {
+                      
+                      const rows = Array.isArray(item.analytes) && item.analytes.length > 0
+                        ? item.analytes
+                        : fallbackRowsFromResultData(item.result_data);
 
-                // Skip rendering if no rows are found after all checks (e.g., the empty Lipid Profile panel)
-                if (!rows || rows.length === 0) return null;
+                      if (!rows || rows.length === 0) return null;
 
-                return (
-                  <div
-                    key={`${item.test_name}-${idx}`}
-                    className="panel-card mb-8 border rounded-lg overflow-hidden"
-                  >
-                    <div className="px-4 py-2 bg-gray-50 border-b flex items-center justify-between">
-                      <div>
-                        <div className="font-semibold">{item.test_name}</div>
-                        <div className="text-xs text-gray-600">
-                          {item.department_name}
-                        </div>
-                      </div>
-                      <div className="text-xs text-gray-600">
-                        Verified:{" "}
-                        <span className="font-medium">
-                          {item.verified_name || "—"}
-                        </span>{" "}
-                        {item.verified_at
-                          ? `on ${new Date(item.verified_at).toLocaleString()}`
-                          : ""}
-                      </div>
-                    </div>
-
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full text-sm">
-                        <thead>
-                          <tr className="bg-gray-100">
-                            <th className="text-left px-4 py-2 border-b">
-                              Analyte
-                            </th>
-                            <th className="text-left px-4 py-2 border-b">
-                              Result
-                            </th>
-                            <th className="text-left px-4 py-2 border-b">
-                              Unit
-                            </th>
-                            <th className="text-left px-4 py-2 border-b">
-                              Reference Range
-                            </th>
-                            <th className="text-left px-4 py-2 border-b">
-                              Flag
-                            </th>
-                            <th className="text-left px-4 py-2 border-b">
-                              Note
-                            </th>
+                      return (
+                        <Fragment key={`${item.test_name}-${idx}`}>
+                          {/* Test/Panel Row */}
+                          <tr className="bg-gray-50 font-semibold border-b border-gray-300">
+                            <td colSpan={5} className="px-4 py-2"> {/* Colspan is 5 now */}
+                                {item.test_name} 
+                            </td>
                           </tr>
-                        </thead>
-                        <tbody>
+
+                          {/* Analytes Rows */}
                           {rows.map((a) => {
                             let refDisplay = a.ref_range || "N/A";
                             if (!a.ref_range) {
-                              const hasLow =
-                                a.ref_low != null && a.ref_low !== "";
-                              const hasHigh =
-                                a.ref_high != null && a.ref_high !== "";
+                              const hasLow = a.ref_low != null && a.ref_low !== "";
+                              const hasHigh = a.ref_high != null && a.ref_high !== "";
                               if (hasLow && hasHigh)
                                 refDisplay = `${a.ref_low} – ${a.ref_high}`;
                               else if (hasLow) refDisplay = `> ${a.ref_low}`;
                               else if (hasHigh) refDisplay = `< ${a.ref_high}`;
                             }
 
-                            const unit =
-                              a.unit ||
-                              a.unit_symbol ||
-                              a.unit_name ||
-                              item.unit ||
-                              "";
+                            const unit = a.unit || a.unit_symbol || a.unit_name || item.unit || "";
 
                             return (
                               <tr
@@ -327,7 +343,8 @@ const ReportPage = () => {
                                 className="odd:bg-white even:bg-gray-50"
                               >
                                 <td className="px-4 py-2 border-b">
-                                  {String(a.analyte_name || `#${a.analyte_id}`)}
+                                  {/* Analyte Name is slightly indented */}
+                                  <span className="pl-4">{String(a.analyte_name || `#${a.analyte_id}`)}</span>
                                 </td>
                                 <td className="px-4 py-2 border-b">
                                   {typeof a.value === "number"
@@ -336,23 +353,20 @@ const ReportPage = () => {
                                 </td>
                                 <td className="px-4 py-2 border-b">{unit}</td>
                                 <td className="px-4 py-2 border-b">
-                                  {refDisplay}
+                                  <FlagCell flag={a.flag} /> {/* Flag moved here */}
                                 </td>
                                 <td className="px-4 py-2 border-b">
-                                  <FlagCell flag={a.flag} />
-                                </td>
-                                <td className="px-4 py-2 border-b">
-                                  {a.note || ""}
+                                  {refDisplay} {/* Reference Range moved here */}
                                 </td>
                               </tr>
                             );
                           })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                );
-              })
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             ) : (
               <div className="p-4 text-center text-gray-500 italic">
                 No test results available.
@@ -362,17 +376,42 @@ const ReportPage = () => {
 
           {/* Footer / Signatures */}
           <footer className="text-xs text-gray-600 mt-16 pt-4 border-t">
-            <div className="grid grid-cols-3 gap-8 mb-6">
-              <div>
-                <p className="mt-8 border-t border-gray-400 pt-1 text-center">
+            
+            {/* Clinical Notes Section (If data exists) */}
+            {clinicalNote && (
+                <div className="mb-6">
+                    <h4 className="font-bold text-sm text-gray-800 mb-1 underline">
+                        Clinical Notes / Interpretation
+                    </h4>
+                    <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                        {clinicalNote}
+                    </p>
+                </div>
+            )}
+
+            {/* Signature Grid */}
+            <div className="grid grid-cols-3 gap-8 mb-6 signature-grid">
+              
+              {/* Analyst */}
+              <div className="flex flex-col items-center">
+                <div className="h-16" />
+                <p className="signature-line w-full pt-1 text-center">
                   Analyst
                 </p>
               </div>
-              <div>
-                <p className="mt-8 border-t border-gray-400 pt-1 text-center">
+              
+              {/* Reviewed By */}
+              <div className="flex flex-col items-center">
+                 {/* Display Reviewed By Name if available from the backend */}
+                <p className="h-16 flex items-end font-semibold text-gray-800">
+                    {reportData.last_reviewed_by || ''}
+                </p>
+                <p className="signature-line w-full pt-1 text-center">
                   Reviewed By
                 </p>
               </div>
+              
+              {/* Pathologist / Approving Officer */}
               <div className="flex flex-col items-center">
                 {/* Professional signature if available & allowed */}
                 {pro?.show_on_reports && pro?.signature_image_url ? (
@@ -399,23 +438,21 @@ const ReportPage = () => {
                       : ""}
                   </p>
                 )}
-                <p className="mt-2 border-t border-gray-400 pt-1 text-center">
+                <p className="mt-2 signature-line w-full pt-1 text-center">
                   Pathologist
                 </p>
               </div>
             </div>
 
+            {/* Verification/Review Stamp (Kept the single stamp) */}
             <div className="text-center mt-4 italic">
               {reportData.last_verified_by && (
                 <p>
                   <strong>Verified by:</strong>{" "}
                   {reportData.last_verified_by || "—"}
-                </p>
-              )}
-              {reportData.last_verified_at && (
-                <p>
-                  <strong>Verified on:</strong>{" "}
-                  {new Date(reportData.last_verified_at).toLocaleString()}
+                  {reportData.last_verified_at && 
+                    ` on ${new Date(reportData.last_verified_at).toLocaleString()}`
+                  }
                 </p>
               )}
             </div>
@@ -428,4 +465,4 @@ const ReportPage = () => {
   );
 };
 
-export default ReportPage;
+export default TestReportPage;

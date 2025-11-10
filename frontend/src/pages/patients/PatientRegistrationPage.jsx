@@ -1,186 +1,146 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import patientService from '../../services/patientService';
-import wardsService from '../../services/wardService';
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import patientService from "../../services/patientService";
+import wardsService from "../../services/wardService";
+import SectionCard from "../../components/SectionCard";
+import { FiUser, FiPhone, FiHome, FiAlertCircle } from "react-icons/fi";
 
 const PatientRegistrationPage = () => {
   const navigate = useNavigate();
   const [wards, setWards] = useState([]);
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    dateOfBirth: '',
-    gender: '',
-    contactInfo: '',
-    wardId: '',
-    referringDoctor: '',
-  });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const userInfo = JSON.parse(localStorage.getItem('userInfo'));
-  const token = userInfo ? userInfo.token : null;
+  const userInfo = JSON.parse(localStorage.getItem("userInfo"));
+  const token = userInfo?.token || null;
 
-  // Fetch wards from API
+  const [formData, setFormData] = useState({
+    firstName: "",
+    middleName: "",
+    lastName: "",
+    dateOfBirth: "",
+    gender: "",
+    maritalStatus: "",
+    occupation: "",
+    contactPhone: "",
+    contactAddress: "",
+    contactEmail: "",
+    admissionType: "OPD",
+    wardId: "",
+    emergencyName: "",
+    emergencyRelationship: "",
+    emergencyPhone: "",
+    referringDoctor: "",
+  });
+
   useEffect(() => {
-    const fetchWards = async () => {
+    const loadWards = async () => {
       try {
         const data = await wardsService.getWards(token);
         setWards(data);
-      } catch (err) {
-        console.error('Error loading wards:', err);
-        setError('Failed to load wards. Please try again.');
+      } catch {
+        setError("Failed to load wards.");
       } finally {
         setLoading(false);
       }
     };
-    fetchWards();
+    loadWards();
   }, [token]);
 
-  const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
-  };
+  const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
       await patientService.registerPatient(formData, token);
-      navigate('/patients', { state: { message: 'Patient registered successfully!' } });
-    } catch (err) {
-      setError('Failed to register patient. Please check your input.');
+      navigate("/patients", { state: { message: "Patient registered successfully!" } });
+    } catch {
+      setError("Registration failed. Please recheck the form.");
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <div className="p-6 text-gray-600">Loading wards...</div>;
+  if (loading) return <div className="p-6 text-gray-600">Loading...</div>;
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold">Register New Patient</h1>
-        <button
-          onClick={() => navigate(-1)}
-          className="bg-gray-500 text-white px-4 py-2 rounded-md hover:bg-gray-600"
+    <div className="p-6 max-w-4xl mx-auto space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-xl md:text-2xl font-bold text-gray-800">Register New Patient</h1>
+        <button 
+          onClick={() => navigate(-1)} 
+          className="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600 transition"
         >
           ← Back
         </button>
       </div>
 
-      {error && (
-        <div className="mb-4 bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded">
-          {error}
-        </div>
-      )}
+      {error && <div className="bg-red-100 text-red-700 px-4 py-2 rounded">{error}</div>}
 
-      <div className="bg-white p-8 rounded-lg shadow-md">
-        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className="block text-gray-700 font-semibold mb-2">First Name</label>
-            <input
-              type="text"
-              name="firstName"
-              value={formData.firstName}
-              onChange={handleChange}
-              required
-              className="w-full p-2 border border-gray-300 rounded-md"
-            />
-          </div>
+      <form onSubmit={handleSubmit} className="space-y-6">
 
-          <div>
-            <label className="block text-gray-700 font-semibold mb-2">Last Name</label>
-            <input
-              type="text"
-              name="lastName"
-              value={formData.lastName}
-              onChange={handleChange}
-              required
-              className="w-full p-2 border border-gray-300 rounded-md"
-            />
-          </div>
+        <SectionCard title="Patient Information" icon={FiUser}>
+          <input className="input" placeholder="First Name" name="firstName" required value={formData.firstName} onChange={handleChange} />
+          <input className="input" placeholder="Middle Name (optional)" name="middleName" value={formData.middleName} onChange={handleChange} />
+          <input className="input" placeholder="Last Name" name="lastName" required value={formData.lastName} onChange={handleChange} />
+          <input type="date" className="input" name="dateOfBirth" required value={formData.dateOfBirth} onChange={handleChange} />
 
-          <div>
-            <label className="block text-gray-700 font-semibold mb-2">Date of Birth</label>
-            <input
-              type="date"
-              name="dateOfBirth"
-              value={formData.dateOfBirth}
-              onChange={handleChange}
-              required
-              className="w-full p-2 border border-gray-300 rounded-md"
-            />
-          </div>
+          <select className="input" name="gender" required value={formData.gender} onChange={handleChange}>
+            <option value="">Gender</option>
+            <option>Male</option>
+            <option>Female</option>
+          </select>
 
-          <div>
-            <label className="block text-gray-700 font-semibold mb-2">Gender</label>
-            <select
-              name="gender"
-              value={formData.gender}
-              onChange={handleChange}
-              required
-              className="w-full p-2 border border-gray-300 rounded-md"
-            >
-              <option value="">Select gender</option>
-              <option value="Male">Male</option>
-              <option value="Female">Female</option>
-            </select>
-          </div>
+          <select className="input" name="maritalStatus" value={formData.maritalStatus} onChange={handleChange}>
+            <option value="">Marital Status</option>
+            <option>Single</option>
+            <option>Married</option>
+            <option>Divorced</option>
+            <option>Widowed</option>
+          </select>
 
-          <div>
-            <label className="block text-gray-700 font-semibold mb-2">Ward</label>
-            <select
-              name="wardId"
-              value={formData.wardId}
-              onChange={handleChange}
-              className="w-full p-2 border border-gray-300 rounded-md"
-            >
-              <option value="">Select ward (optional)</option>
-              {wards.map((ward) => (
-                <option key={ward.id} value={ward.id}>
-                  {ward.name}
-                </option>
+          <input className="input" placeholder="Occupation" name="occupation" value={formData.occupation} onChange={handleChange} />
+        </SectionCard>
+
+        <SectionCard title="Contact Information" icon={FiPhone}>
+          <input className="input" placeholder="Phone Number" name="contactPhone" required value={formData.contactPhone} onChange={handleChange} />
+          <input className="input" placeholder="Email (optional)" name="contactEmail" value={formData.contactEmail} onChange={handleChange} />
+          <input className="input md:col-span-2" placeholder="Home Address" name="contactAddress" value={formData.contactAddress} onChange={handleChange} />
+        </SectionCard>
+
+        <SectionCard title="Admission Details" icon={FiHome}>
+          <select className="input" name="admissionType" value={formData.admissionType} onChange={handleChange}>
+            <option value="OPD">OPD (Outpatient)</option>
+            <option value="Inpatient">Inpatient</option>
+          </select>
+
+          {formData.admissionType === "Inpatient" && (
+            <select className="input" name="wardId" value={formData.wardId} onChange={handleChange}>
+              <option value="">Select Ward</option>
+              {wards.map((w) => (
+                <option key={w.id} value={w.id}>{w.name}</option>
               ))}
             </select>
-          </div>
+          )}
+        </SectionCard>
 
-          <div>
-            <label className="block text-gray-700 font-semibold mb-2">Referring Doctor</label>
-            <input
-              type="text"
-              name="referringDoctor"
-              value={formData.referringDoctor}
-              onChange={handleChange}
-              className="w-full p-2 border border-gray-300 rounded-md"
-            />
-          </div>
+        <SectionCard title="Emergency Contact" icon={FiAlertCircle}>
+          <input className="input" placeholder="Contact Name" name="emergencyName" value={formData.emergencyName} onChange={handleChange} />
+          <input className="input" placeholder="Relationship" name="emergencyRelationship" value={formData.emergencyRelationship} onChange={handleChange} />
+          <input className="input" placeholder="Phone Number" name="emergencyPhone" value={formData.emergencyPhone} onChange={handleChange} />
+        </SectionCard>
 
-          <div className="col-span-2">
-            <label className="block text-gray-700 font-semibold mb-2">Contact Info</label>
-            <input
-              type="text"
-              name="contactInfo"
-              value={formData.contactInfo}
-              onChange={handleChange}
-              placeholder="Phone number, address, etc."
-              className="w-full p-2 border border-gray-300 rounded-md"
-            />
-          </div>
+        <button 
+          type="submit"
+          disabled={saving}
+          className={`w-full py-3 text-white text-lg rounded-lg transition ${saving ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"}`}
+        >
+          {saving ? "Saving..." : "Register Patient"}
+        </button>
 
-          <div className="col-span-2">
-            <button
-              type="submit"
-              disabled={saving}
-              className={`w-full py-2 px-4 rounded-md text-white ${
-                saving ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'
-              } transition`}
-            >
-              {saving ? 'Saving...' : 'Register Patient'}
-            </button>
-          </div>
-        </form>
-      </div>
+      </form>
     </div>
   );
 };

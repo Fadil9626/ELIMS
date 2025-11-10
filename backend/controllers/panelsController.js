@@ -28,7 +28,8 @@ const getPanels = async (req, res) => {
       FROM test_catalog tc
       LEFT JOIN (
         SELECT panel_id, COUNT(*) AS cnt
-        FROM panel_members
+        -- ✅ FIX: Use correct table name
+        FROM test_panel_analytes
         GROUP BY panel_id
       ) pm ON pm.panel_id = tc.id
       WHERE tc.is_panel = TRUE
@@ -144,8 +145,9 @@ const deletePanel = async (req, res) => {
     );
     const inUse = (refRows[0]?.cnt ?? 0) > 0;
 
-    // Always remove panel_members links
-    await client.query(`DELETE FROM panel_members WHERE panel_id = $1`, [panelId]);
+    // Always remove panel links
+    // ✅ FIX: Use correct table name
+    await client.query(`DELETE FROM test_panel_analytes WHERE panel_id = $1`, [panelId]);
 
     if (inUse) {
       // Soft delete: deactivate panel, keep catalog row
@@ -194,7 +196,7 @@ const deletePanel = async (req, res) => {
 };
 
 /* ============================================================
- * 🔹 ANALYTE / TEST MANAGEMENT (Using panel_members)
+ * 🔹 ANALYTE / TEST MANAGEMENT
  * ============================================================ */
 
 // 🧠 Get analytes linked to a specific panel
@@ -213,11 +215,12 @@ const getAnalytesForPanel = async (req, res) => {
         u.unit_name,
         u.symbol AS unit_symbol,
         d.name AS department_name
-      FROM panel_members pm
-      JOIN test_catalog tc   ON tc.id = pm.member_id
+      -- ✅ FIX: Use correct table and column names
+      FROM test_panel_analytes tpa
+      JOIN test_catalog tc   ON tc.id = tpa.analyte_id
       LEFT JOIN units u       ON u.id = tc.unit_id
       LEFT JOIN departments d ON d.id = tc.department_id
-      WHERE pm.panel_id = $1
+      WHERE tpa.panel_id = $1
       ORDER BY tc.name ASC;
       `,
       [panelId]
@@ -241,7 +244,8 @@ const addAnalyteToPanel = async (req, res) => {
     return res.status(400).json({ message: "Invalid panelId" });
   }
   if (!Number.isFinite(aid)) {
-    return res.status(400).json({ message: "Analyte ID (member_id) is required and must be numeric." });
+    // ✅ FIX: Use correct column name in error
+    return res.status(400).json({ message: "Analyte ID (analyte_id) is required and must be numeric." });
   }
 
   try {
@@ -268,7 +272,8 @@ const addAnalyteToPanel = async (req, res) => {
 
     await pool.query(
       `
-      INSERT INTO panel_members (panel_id, member_id)
+      -- ✅ FIX: Use correct table and column names
+      INSERT INTO test_panel_analytes (panel_id, analyte_id)
       VALUES ($1, $2)
       ON CONFLICT DO NOTHING;
       `,
@@ -298,7 +303,8 @@ const removeAnalyteFromPanel = async (req, res) => {
 
   try {
     const result = await pool.query(
-      `DELETE FROM panel_members WHERE panel_id = $1 AND member_id = $2`,
+      // ✅ FIX: Use correct table and column names
+      `DELETE FROM test_panel_analytes WHERE panel_id = $1 AND analyte_id = $2`,
       [pid, aid]
     );
     if (result.rowCount === 0) {

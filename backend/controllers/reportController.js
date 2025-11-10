@@ -28,16 +28,16 @@ function ageInYears(dob) {
 // Gets reference range data for a single analyte
 async function getRefRange(analyteId, gender, ageYears) {
   const sql = `SELECT nr.min_value AS low, nr.max_value AS high, u.symbol AS unit
-           FROM normal_ranges nr
-           LEFT JOIN units u ON u.id = nr.unit_id
-           WHERE nr.analyte_id = $1
-             AND (nr.gender = $2 OR nr.gender = 'Any' OR nr.gender IS NULL)
-             AND ($3::INTEGER IS NULL OR nr.age_min IS NULL OR nr.age_min <= $3::INTEGER)
-             AND ($3::INTEGER IS NULL OR nr.age_max IS NULL OR nr.age_max >= $3::INTEGER)
-           ORDER BY
-             CASE WHEN nr.gender = $2 THEN 0 ELSE 1 END,
-             (CASE WHEN nr.age_min IS NULL AND nr.age_max IS NULL THEN 1 ELSE 0 END)
-           LIMIT 1`;
+             FROM normal_ranges nr
+             LEFT JOIN units u ON u.id = nr.unit_id
+             WHERE nr.analyte_id = $1
+               AND (nr.gender = $2 OR nr.gender = 'Any' OR nr.gender IS NULL)
+               AND ($3::INTEGER IS NULL OR nr.age_min IS NULL OR nr.age_min <= $3::INTEGER)
+               AND ($3::INTEGER IS NULL OR nr.age_max IS NULL OR nr.age_max >= $3::INTEGER)
+             ORDER BY
+               CASE WHEN nr.gender = $2 THEN 0 ELSE 1 END,
+               (CASE WHEN nr.age_min IS NULL AND nr.age_max IS NULL THEN 1 ELSE 0 END)
+             LIMIT 1`;
 
   const ageParam = typeof ageYears === 'number' && ageYears >= 0 ? ageYears : null;
 
@@ -82,7 +82,7 @@ function computeFlag(value, low, high) {
 }
 
 /* ------------------------------------------------------------
- * | 📋 REPORT LIST
+ * | 📋 REPORT LIST (No change needed)
  * ------------------------------------------------------------
  */
 
@@ -185,7 +185,7 @@ const getAllCompletedReports = async (req, res) => {
 };
 
 /* ------------------------------------------------------------
- * | 📄 REPORT DETAIL
+ * | 📄 REPORT DETAIL (Updated for Reviewer/Verifier data)
  * ------------------------------------------------------------
  */
 
@@ -196,6 +196,7 @@ const getReportByRequestId = async (req, res) => {
 
   try {
     // === QUERY 1: Get Patient/Request Info ===
+    // Assuming p.phone and p.address columns now exist on the patients table
     const { rows: reqRows } = await client.query(
       `SELECT tr.*, p.lab_id, p.first_name, p.last_name, p.gender, p.date_of_birth, p.phone, p.address
        FROM test_requests tr
@@ -219,39 +220,43 @@ const getReportByRequestId = async (req, res) => {
     // === QUERY 2: Get ALL Top-Level Items (Panels & Single Tests) ===
     const { rows: allTopLevelItems } = await client.query(
       `SELECT
-        tri.id AS request_item_id,
-        tri.test_catalog_id,
-        tc.name AS test_name,
-        tc.is_panel,
-        d.name AS department_name,
-        tri.verified_name,
-        tri.updated_at AS verified_at,
-        tri.result_value,
-        tri.status
-      FROM test_request_items tri
-      JOIN test_catalog tc ON tri.test_catalog_id = tc.id
-      LEFT JOIN departments d ON tc.department_id = d.id
-      WHERE tri.test_request_id = $1 AND tri.parent_id IS NULL
-      ORDER BY tc.name ASC;`,
+         tri.id AS request_item_id,
+         tri.test_catalog_id,
+         tc.name AS test_name,
+         tc.is_panel,
+         d.name AS department_name,
+         tri.verified_name,
+         tri.verified_at,   -- Use the explicit verified_at column
+         tri.result_value,
+         tri.status,
+         tri.reviewed_by_name,   -- 💡 ADDED
+         tri.reviewed_at         -- 💡 ADDED
+       FROM test_request_items tri
+       JOIN test_catalog tc ON tri.test_catalog_id = tc.id
+       LEFT JOIN departments d ON tc.department_id = d.id
+       WHERE tri.test_request_id = $1 AND tri.parent_id IS NULL
+       ORDER BY tc.name ASC;`,
       [id]
     );
 
     // === QUERY 3: Get ALL Child Analytes for this Request ===
     const { rows: allChildItems } = await client.query(
       `SELECT
-        tri.id AS request_item_id,
-        tri.test_catalog_id,
-        tc.name AS test_name,
-        tri.parent_id,
-        d.name AS department_name,
-        tri.verified_name,
-        tri.updated_at AS verified_at,
-        tri.result_value,
-        tri.status
-      FROM test_request_items tri
-      JOIN test_catalog tc ON tri.test_catalog_id = tc.id
-      LEFT JOIN departments d ON tc.department_id = d.id
-      WHERE tri.test_request_id = $1 AND tri.parent_id IS NOT NULL;`,
+         tri.id AS request_item_id,
+         tri.test_catalog_id,
+         tc.name AS test_name,
+         tri.parent_id,
+         d.name AS department_name,
+         tri.verified_name,
+         tri.verified_at,   -- Use the explicit verified_at column
+         tri.result_value,
+         tri.status,
+         tri.reviewed_by_name,   -- 💡 ADDED
+         tri.reviewed_at         -- 💡 ADDED
+       FROM test_request_items tri
+       JOIN test_catalog tc ON tri.test_catalog_id = tc.id
+       LEFT JOIN departments d ON tc.department_id = d.id
+       WHERE tri.test_request_id = $1 AND tri.parent_id IS NOT NULL;`,
       [id]
     );
 
@@ -305,9 +310,23 @@ const getReportByRequestId = async (req, res) => {
 
     // --- Build Report Items using Parent/Child Logic ---
     const items = [];
+    let lastReview = { reviewed_by_name: '—', reviewed_at: null };
+    let lastVerification = { verified_name: '—', verified_at: null };
 
     // Loop through all FILTERED TOP-LEVEL items
     for (const r of filteredTopLevelItems) {
+      
+      // Update last review/verification data based on top-level item's data
+      const currentVerifiedAt = new Date(r.verified_at || 0).getTime();
+      const currentReviewedAt = new Date(r.reviewed_at || 0).getTime();
+      
+      if (currentVerifiedAt > new Date(lastVerification.verified_at || 0).getTime()) {
+          lastVerification = { verified_name: r.verified_name, verified_at: r.verified_at };
+      }
+      if (currentReviewedAt > new Date(lastReview.reviewed_at || 0).getTime()) {
+          lastReview = { reviewed_by_name: r.reviewed_by_name, reviewed_at: r.reviewed_at };
+      }
+
       // --- 1. If it's a PANEL ---
       if (r.is_panel) {
         // Find its children from the map
@@ -317,6 +336,18 @@ const getReportByRequestId = async (req, res) => {
         // Process all found children
         if (childAnalytesRaw.length > 0) {
           for (const child of childAnalytesRaw) {
+            
+            // Update last review/verification data based on child item's data
+            const childVerifiedAt = new Date(child.verified_at || 0).getTime();
+            const childReviewedAt = new Date(child.reviewed_at || 0).getTime();
+
+            if (childVerifiedAt > new Date(lastVerification.verified_at || 0).getTime()) {
+                lastVerification = { verified_name: child.verified_name, verified_at: child.verified_at };
+            }
+            if (childReviewedAt > new Date(lastReview.reviewed_at || 0).getTime()) {
+                lastReview = { reviewed_by_name: child.reviewed_by_name, reviewed_at: child.reviewed_at };
+            }
+
             const range = await getRefRange(
               child.test_catalog_id,
               p.gender,
@@ -327,7 +358,6 @@ const getReportByRequestId = async (req, res) => {
             processedAnalytes.push({
               analyte_id: child.test_catalog_id,
               analyte_name: child.test_name,
-              // --- 💡 Tiny Tweak: Add .trim() for safety ---
               value: child.result_value?.trim() ?? '',
               unit: range.unit || '',
               ref_low: range.low,
@@ -335,8 +365,8 @@ const getReportByRequestId = async (req, res) => {
               ref_range: range.ref_text,
               flag,
               note: '',
-              verified_name: child.verified_name,
-              verified_at: child.verified_at,
+              verified_name: child.verified_name, // Pass child verified data
+              verified_at: child.verified_at,       // Pass child verified data
             });
           }
 
@@ -344,20 +374,8 @@ const getReportByRequestId = async (req, res) => {
           items.push({
             test_name: r.test_name,
             department_name: r.department_name || 'N/A',
-            verified_name:
-              r.verified_name || // Use panel's verification
-              (processedAnalytes.length // Or find latest child verification
-                ? processedAnalytes.sort(
-                    (a, b) => new Date(b.verified_at) - new Date(a.verified_at)
-                  )[0].verified_name
-                : '—'),
-            verified_at:
-              r.verified_at ||
-              (processedAnalytes.length
-                ? processedAnalytes.sort(
-                    (a, b) => new Date(b.verified_at) - new Date(a.verified_at)
-                  )[0].verified_at
-                : null),
+            verified_name: r.verified_name || processedAnalytes[0]?.verified_name || '—',
+            verified_at: r.verified_at || processedAnalytes[0]?.verified_at || null,
             analytes: processedAnalytes,
           });
         }
@@ -378,7 +396,6 @@ const getReportByRequestId = async (req, res) => {
               {
                 analyte_id: r.test_catalog_id,
                 analyte_name: r.test_name,
-                // --- 💡 Tiny Tweak: Add .trim() for safety ---
                 value: r.result_value?.trim() ?? '',
                 unit: range.unit || '',
                 ref_low: range.low,
@@ -410,7 +427,6 @@ const getReportByRequestId = async (req, res) => {
             {
               analyte_id: r.test_catalog_id,
               analyte_name: r.test_name,
-              // --- 💡 Tiny Tweak: Add .trim() for safety ---
               value: r.result_value?.trim() ?? '',
               unit: range.unit || '',
               ref_low: range.low,
@@ -418,6 +434,7 @@ const getReportByRequestId = async (req, res) => {
               ref_range: range.ref_text,
               flag,
               note: '',
+              // No need for verified_name/at here as it's included in the top-level item 'r'
             },
           ],
         });
@@ -426,22 +443,14 @@ const getReportByRequestId = async (req, res) => {
 
     // --- Final Assembly ---
 
-    // Find last verification
-    const lastVerification = items.reduce(
-      (latest, item) => {
-        const t = new Date(item.verified_at || 0);
-        if (!latest.verified_at || t > new Date(latest.verified_at))
-          return item;
-        return latest;
-      },
-      { verified_name: '—', verified_at: null }
-    );
-
     const fullReport = {
       ...patientInfo,
       ...reportInfo,
+      // Pass the latest verified and reviewed data for the report stamp
       last_verified_by: lastVerification.verified_name,
       last_verified_at: lastVerification.verified_at,
+      last_reviewed_by: lastReview.reviewed_by_name,  // 💡 ADDED
+      last_reviewed_at: lastReview.reviewed_at,      // 💡 ADDED
       items,
     };
 

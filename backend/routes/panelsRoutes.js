@@ -1,9 +1,9 @@
 const express = require("express");
 const router = express.Router();
+
+// Controllers
 const {
   getPanels,
-  getTestsForPanel,
-  addTestToPanel,
   createPanel,
   updatePanel,
   deletePanel,
@@ -12,39 +12,55 @@ const {
   removeAnalyteFromPanel,
 } = require("../controllers/panelsController");
 
-const { protect, authorize } = require("../middleware/authMiddleware");
-const adminOnly = authorize("settings", "view");
+// ✅ Minimal JWT auth (same logic used in server.js)
+const jwt = require("jsonwebtoken");
+
+const requireAuth = (req, res, next) => {
+  try {
+    const h = req.headers.authorization || "";
+    if (!h.toLowerCase().startsWith("bearer "))
+      return res.status(401).json({ message: "No token provided" });
+
+    const decoded = jwt.verify(h.slice(7).trim(), process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+};
+
+// ✅ Only Admin / Super Admin can modify panels
+const adminOnly = (req, res, next) => {
+  const role = req.user?.role?.toLowerCase?.();
+  if (role !== "admin" && role !== "super_admin") {
+    return res.status(403).json({ message: "Forbidden: Admin Only" });
+  }
+  next();
+};
 
 // ============================================================
 // 🔹 Panels CRUD
 // ============================================================
 
-// Get all panels / Create new panel
 router
   .route("/")
-  .get(protect, adminOnly, getPanels)
-  .post(protect, adminOnly, createPanel);
+  .get(requireAuth, adminOnly, getPanels)
+  .post(requireAuth, adminOnly, createPanel);
 
-// Get, Update, or Delete a specific panel
 router
   .route("/:id")
-  .put(protect, adminOnly, updatePanel)
-  .delete(protect, adminOnly, deletePanel);
+  .put(requireAuth, adminOnly, updatePanel)
+  .delete(requireAuth, adminOnly, deletePanel);
 
 // ============================================================
-// 🔹 Tests (Analytes) within Panels
+// 🔹 Analytes inside a Panel
 // ============================================================
 
-// Get all analytes/tests in a panel
-router.get("/:panelId/analytes", protect, adminOnly, getAnalytesForPanel);
-
-// Add a new analyte to a panel
-router.post("/:panelId/analytes", protect, adminOnly, addAnalyteToPanel);
-
-// Remove an analyte from a panel
+router.get("/:panelId/analytes", requireAuth, adminOnly, getAnalytesForPanel);
+router.post("/:panelId/analytes", requireAuth, adminOnly, addAnalyteToPanel);
 router.delete(
   "/:panelId/analytes/:analyteId",
-  protect,
+  requireAuth,
   adminOnly,
   removeAnalyteFromPanel
 );

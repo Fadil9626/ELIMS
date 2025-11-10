@@ -256,6 +256,73 @@ const updateAnalyte = async (req, res) => {
   }
 };
 
+// ✅ NEW: deleteAnalyte — safe delete with soft-delete fallback
+const deleteAnalyte = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await ensureSchema();
+
+    // Is this ID an analyte (not panel)?
+    const { rows: kind } = await pool.query(
+      `SELECT is_panel FROM test_catalog WHERE id = $1`,
+      [id]
+    );
+    if (!kind.length)
+      return res.status(404).json({ success: false, message: "Test not found" });
+    if (kind[0].is_panel)
+      return res.status(400).json({ success: false, message: "Use panel endpoints to remove a panel." });
+
+    // Check references
+    const { rows: r1 } = await pool.query(
+      `SELECT COUNT(*)::int AS cnt FROM test_request_items WHERE test_catalog_id = $1`,
+      [id]
+    );
+    const { rows: r2 } = await pool.query(
+      `SELECT COUNT(*)::int AS cnt FROM test_panel_analytes WHERE analyte_id = $1`,
+      [id]
+    );
+
+    const inUse = (r1[0]?.cnt ?? 0) > 0 || (r2[0]?.cnt ?? 0) > 0;
+
+    if (inUse) {
+      // Soft delete
+      const { rows } = await pool.query(
+        `UPDATE test_catalog SET is_active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id, name, is_active`,
+        [id]
+      );
+      return res.status(200).json({
+        success: true,
+        soft_deleted: true,
+        message:
+          "Analyte is referenced by requests or panels. It has been deactivated instead of deleted.",
+        data: rows[0],
+      });
+    }
+
+    // Hard delete
+    const del = await pool.query(`DELETE FROM test_catalog WHERE id = $1`, [id]);
+    if (del.rowCount === 0)
+      return res.status(404).json({ success: false, message: "Test not found" });
+
+    res.json({
+      success: true,
+      soft_deleted: false,
+      message: "Analyte deleted successfully.",
+    });
+  } catch (err) {
+    if (err.code === "23503") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "This analyte cannot be deleted because it is referenced by other items. It has been kept.",
+        error: err.detail,
+      });
+    }
+    sendError(res, "deleteAnalyte", err, "Failed to delete analyte");
+  }
+};
+
 // =============================================================
 // 🧩 PANELS
 // =============================================================
@@ -351,10 +418,10 @@ const recalcPanelPrice = async (req, res) => {
     );
     const total = Number(rows[0]?.total || 0);
 
-    await pool.query(`UPDATE test_catalog SET price = $1, updated_at = NOW() WHERE id = $2 AND is_panel = TRUE`, [
-      total,
-      id,
-    ]);
+    await pool.query(
+      `UPDATE test_catalog SET price = $1, updated_at = NOW() WHERE id = $2 AND is_panel = TRUE`,
+      [total, id]
+    );
 
     res.json({ success: true, message: "✅ Panel price recalculated", total });
   } catch (err) {
@@ -425,7 +492,10 @@ const addPanelAnalyte = async (req, res) => {
       [id]
     );
     if (p[0]?.panel_auto_recalc) {
-      await recalcPanelPrice({ params: { id } }, { json: () => {}, status: () => ({ json: () => {} }) });
+      await recalcPanelPrice(
+        { params: { id } },
+        { json: () => {}, status: () => ({ json: () => {} }) }
+      );
     }
 
     res.json({ success: true, message: "✅ Analyte added to panel successfully." });
@@ -450,7 +520,10 @@ const removePanelAnalyte = async (req, res) => {
       [panelId]
     );
     if (p[0]?.panel_auto_recalc) {
-      await recalcPanelPrice({ params: { id: panelId } }, { json: () => {}, status: () => ({ json: () => {} }) });
+      await recalcPanelPrice(
+        { params: { id: panelId } },
+        { json: () => {}, status: () => ({ json: () => {} }) }
+      );
     }
 
     res.json({ success: true, message: "🗑️ Analyte removed from panel successfully." });
@@ -799,6 +872,7 @@ module.exports = {
   getAnalytes,
   createAnalyte,
   updateAnalyte,
+  deleteAnalyte,      // 👈 added
 
   // 🧩 Panels
   getPanels,

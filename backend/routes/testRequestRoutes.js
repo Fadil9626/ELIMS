@@ -4,81 +4,59 @@ const testRequestController = require("../controllers/testRequestController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 
 /* =============================================================
- * ROUTE PARAM VALIDATION
+ * ROUTE PARAM VALIDATION (keep safe numeric ID)
  * ============================================================= */
+// Original 'id' validation is fine for general use, but we'll add a 'patientId' param validator.
 router.param("id", (req, res, next, id) => {
-  if (!/^\d+$/.test(String(id))) {
-    return res.status(400).json({ message: "Invalid ID (must be numeric)" });
-  }
-  next();
+    if (!/^\d+$/.test(String(id))) {
+        return res.status(400).json({ message: "Invalid ID (must be numeric)" });
+    }
+    next();
+});
+
+// 💡 NEW: Param validation for patientId to ensure it's numeric
+router.param("patientId", (req, res, next, patientId) => {
+    if (!/^\d+$/.test(String(patientId))) {
+        return res.status(400).json({ message: "Invalid Patient ID (must be numeric)" });
+    }
+    next();
 });
 
 /* =============================================================
  * ROUTES
  * ============================================================= */
 
-// 🔹 Get all test requests
+// 🔹 Get ALL test requests
 router.get(
-  "/",
-  protect,
-  authorize("tests", "view"),
-  testRequestController.getAllTestRequests
+    "/",
+    protect,
+    authorize("tests", "view"),
+    testRequestController.getAllTestRequests
 );
 
-// 🔹 Create new test request
+// 🔹 Create test request
 router.post(
-  "/",
-  protect,
-  authorize("tests", "create"),
-  testRequestController.createTestRequest
+    "/",
+    protect,
+    authorize("tests", "create"),
+    testRequestController.createTestRequest
 );
 
-// 🔹 Get a single test request (with items)
+// 💡 FIX: Add route to get ALL requests for a specific patient
 router.get(
-  "/:id",
-  protect,
-  authorize("tests", "view"),
-  testRequestController.getTestRequestById
+    "/patient/:patientId",
+    protect,
+    authorize("patients", "view"), // Use patient view permission
+    testRequestController.getTestRequestsByPatientId 
 );
 
-// 🔹 Get result entry data (grouped analytes)
+// 🔹 Get single request (details page)
 router.get(
-  "/:id/result-entry",
-  protect,
-  authorize("results", "enter"),
-  testRequestController.getResultEntry
+    "/:id",
+    protect,
+    authorize("tests", "view"),
+    testRequestController.getTestRequestById
 );
 
-// 🔹 Save test results (bulk entry)
-router.post(
-  "/:id/results",
-  protect,
-  authorize("results", "enter"),
-  testRequestController.saveResultEntry
-);
-
-// 🔹 Verify or reject test results
-router.post(
-  "/:id/verify-results",
-  protect,
-  authorize("results", "verify"),
-  testRequestController.verifyResults
-);
-
-// 🔹 Update workflow status
-router.put(
-  "/:id",
-  protect,
-  authorize("tests", "edit"),
-  testRequestController.updateTestRequestStatus
-);
-
-// 🔹 Process payment
-router.post(
-  "/:id/payment",
-  protect,
-  authorize("billing", "process"),
-  testRequestController.processPayment
-);
 
 module.exports = router;

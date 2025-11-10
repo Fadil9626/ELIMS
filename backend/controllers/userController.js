@@ -1,362 +1,217 @@
-const pool = require("../config/database");
+// ============================================================
+// USER CONTROLLER (RBAC + Multi-Role Support)
+// ============================================================
+
 const bcrypt = require("bcryptjs");
-const path = require("path");
-const fs = require("fs");
+const pool = require("../config/database");
+const { logAuditEvent } = require("../utils/auditLogger");
 
-// -----------------------------------------------------------------------------
-// 🧩 Helper: Record last login timestamp (used on login success)
-// -----------------------------------------------------------------------------
-const recordLogin = async (userId) => {
-  try {
-    await pool.query(
-      "UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1",
-      [userId]
-    );
-  } catch (err) {
-    console.error("⚠️ Failed to update last_login_at:", err.message);
+// ----------------------------------------
+// Helper: Assign roles
+// ----------------------------------------
+async function assignRoles(userId, roleIds = []) {
+  await pool.query(`DELETE FROM user_roles WHERE user_id = $1`, [userId]);
+  if (Array.isArray(roleIds) && roleIds.length > 0) {
+    const values = roleIds.map((r) => `(${userId}, ${r})`).join(",");
+    await pool.query(`INSERT INTO user_roles (user_id, role_id) VALUES ${values}`);
   }
-};
+}
 
-// -----------------------------------------------------------------------------
-// @desc Get profile of currently logged-in user (with roles & permissions)
-// -----------------------------------------------------------------------------
+// ----------------------------------------
+// GET /api/users/profile   (self)
+// ----------------------------------------
 const getUserProfile = async (req, res) => {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ message: "Not authenticated." });
-
-    const result = await pool.query(
-      `
-      SELECT 
-        u.id,
-        u.full_name,
-        u.email,
-        u.department,
-        u.is_active,
-        u.profile_image_url,
-        u.created_at,
-        u.last_login_at,
-        JSON_AGG(
-          DISTINCT JSONB_BUILD_OBJECT('id', r.id, 'name', r.name)
-        ) FILTER (WHERE r.id IS NOT NULL) AS roles,
-        JSON_AGG(
-          DISTINCT JSONB_BUILD_OBJECT('id', p.id, 'name', p.name, 'code', p.code)
-        ) FILTER (WHERE p.id IS NOT NULL) AS permissions
-      FROM users u
-      LEFT JOIN user_roles ur ON ur.user_id = u.id
-      LEFT JOIN roles r ON r.id = ur.role_id
-      LEFT JOIN role_permissions rp ON rp.role_id = r.id
-      LEFT JOIN permissions p ON p.id = rp.permission_id
-      WHERE u.id = $1
-      GROUP BY u.id
-      `,
-      [userId]
-    );
-
-    if (result.rows.length === 0)
-      return res.status(404).json({ message: "User not found." });
-
-    res.status(200).json(result.rows[0]);
-  } catch (error) {
-    console.error("getUserProfile Error:", error.message);
-    res.status(500).json({ message: "Server Error" });
-  }
+  res.json(req.user);
 };
 
-// -----------------------------------------------------------------------------
-// @desc Get all doctors for dropdowns
-// -----------------------------------------------------------------------------
-const getDoctors = async (req, res) => {
-  try {
-    const doctors = await pool.query(`
-      SELECT u.id, u.full_name
-      FROM users u
-      JOIN user_roles ur ON ur.user_id = u.id
-      JOIN roles r ON ur.role_id = r.id
-      WHERE r.name ILIKE 'doctor'
-      ORDER BY u.full_name ASC
-    `);
-    res.status(200).json(doctors.rows);
-  } catch (error) {
-    console.error(error.message);
-    res.status(500).json({ message: "Server Error" });
-  }
-};
-
-// -----------------------------------------------------------------------------
-// @desc Get all users (with roles)
-// -----------------------------------------------------------------------------
+// ----------------------------------------
+// GET /api/users           (list all)
+// ----------------------------------------
 const getAllUsers = async (req, res) => {
-  try {
-    const users = await pool.query(`
-      SELECT
-        u.id,
-        u.full_name,
-        u.email,
-        u.department,
-        COALESCE(
-          JSON_AGG(
-            JSON_BUILD_OBJECT('id', r.id, 'name', r.name)
-          ) FILTER (WHERE r.id IS NOT NULL),
-          '[]'
-        ) AS roles
-      FROM users u
-      LEFT JOIN user_roles ur ON ur.user_id = u.id
-      LEFT JOIN roles r ON ur.role_id = r.id
-      GROUP BY u.id
-      ORDER BY u.full_name ASC
-    `);
-    res.status(200).json(users.rows);
-  } catch (error) {
-    console.error("getAllUsers Error:", error.message);
-    res.status(500).json({ message: "Server Error" });
-  }
+  const { rows } = await pool.query(`
+    SELECT 
+      u.id, 
+      u.full_name, 
+      u.email, 
+      u.is_active,
+      u.department,
+      ARRAY_REMOVE(ARRAY_AGG(r.name), NULL) AS roles
+    FROM users u
+    LEFT JOIN user_roles ur ON ur.user_id = u.id
+    LEFT JOIN roles r ON r.id = ur.role_id
+    GROUP BY u.id
+    ORDER BY u.full_name ASC
+  `);
+  res.json(rows);
 };
 
-// -----------------------------------------------------------------------------
-// @desc Get all active users
-// -----------------------------------------------------------------------------
+// ----------------------------------------
+// GET /api/users/active
+// ----------------------------------------
 const getActiveUsers = async (req, res) => {
-  try {
-    const active = await pool.query(`
-      SELECT u.id, u.full_name, u.email, u.department, u.profile_image_url,
-        COALESCE(
-          JSON_AGG(
-            JSON_BUILD_OBJECT('id', r.id, 'name', r.name)
-          ) FILTER (WHERE r.id IS NOT NULL),
-          '[]'
-        ) AS roles
-      FROM users u
-      LEFT JOIN user_roles ur ON ur.user_id = u.id
-      LEFT JOIN roles r ON ur.role_id = r.id
-      WHERE u.is_active = TRUE
-      GROUP BY u.id
-      ORDER BY u.full_name ASC
-    `);
-    res.status(200).json(active.rows);
-  } catch (error) {
-    console.error("getActiveUsers Error:", error.message);
-    res.status(500).json({ message: "Server Error" });
-  }
+  const { rows } = await pool.query(`
+    SELECT id, full_name, email, department
+    FROM users
+    WHERE is_active = TRUE
+    ORDER BY full_name ASC
+  `);
+  res.json(rows);
 };
 
-// -----------------------------------------------------------------------------
-// @desc Create new user
-// -----------------------------------------------------------------------------
+// ----------------------------------------
+// GET /api/users/doctors
+// ----------------------------------------
+const getDoctors = async (req, res) => {
+  const { rows } = await pool.query(`
+    SELECT u.id, u.full_name, u.email
+    FROM users u
+    JOIN user_roles ur ON ur.user_id = u.id
+    WHERE ur.role_id = (SELECT id FROM roles WHERE LOWER(name) = 'doctor' LIMIT 1)
+    ORDER BY u.full_name ASC
+  `);
+  res.json(rows);
+};
+
+// ----------------------------------------
+// POST /api/users   (Create User + Assign Roles)
+// ----------------------------------------
 const createUser = async (req, res) => {
-  const {
-    full_name,
-    fullName,
-    email,
-    password,
-    role_ids,
-    roleIds,
-    department,
-  } = req.body;
+  const { full_name, email, password, department, role_ids } = req.body;
 
-  const name = full_name || fullName;
-  const roles = role_ids || roleIds;
-
-  if (!name || !email || !password || !roles?.length) {
-    return res
-      .status(400)
-      .json({ message: "Full name, email, password, and at least one role are required." });
+  if (!full_name || !email || !password) {
+    return res.status(400).json({ message: "Name, email, and password are required." });
   }
 
-  try {
-    const existing = await pool.query("SELECT 1 FROM users WHERE email = $1", [email]);
-    if (existing.rows.length > 0)
-      return res.status(400).json({ message: "A user with this email already exists." });
-
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
-
-    const userResult = await pool.query(
-      `INSERT INTO users (full_name, email, password_hash, department, is_active)
-       VALUES ($1, $2, $3, $4, TRUE)
-       RETURNING id, full_name, email, department`,
-      [name, email, passwordHash, department || null]
-    );
-
-    const userId = userResult.rows[0].id;
-
-    for (const rid of roles) {
-      await pool.query(
-        "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-        [userId, rid]
-      );
-    }
-
-    res.status(201).json(userResult.rows[0]);
-  } catch (error) {
-    console.error("createUser Error:", error.message);
-    res.status(500).json({ message: "Server Error" });
+  const exists = await pool.query(`SELECT id FROM users WHERE email = $1`, [email]);
+  if (exists.rows.length > 0) {
+    return res.status(400).json({ message: "Email already exists." });
   }
+
+  const password_hash = await bcrypt.hash(password, 12);
+
+  const result = await pool.query(
+    `INSERT INTO users (full_name, email, password_hash, department, is_active, created_at)
+     VALUES ($1, $2, $3, $4, TRUE, NOW())
+     RETURNING id`,
+    [full_name, email, password_hash, department || null]
+  );
+
+  const userId = result.rows[0].id;
+  await assignRoles(userId, role_ids);
+
+  await logAuditEvent({
+    user_id: req.user.id,
+    action: "create",
+    resource: "users",
+    description: `Created user ${full_name}`,
+  });
+
+  res.status(201).json({ message: "User created successfully." });
 };
 
-// -----------------------------------------------------------------------------
-// @desc Update user
-// -----------------------------------------------------------------------------
+// ----------------------------------------
+// PUT /api/users/:id   (Update User + Roles)
+// ----------------------------------------
 const updateUser = async (req, res) => {
-  const { id } = req.params;
-  const { full_name, fullName, email, role_ids, roleIds, department } = req.body;
+  const { full_name, email, department, role_ids } = req.body;
+  const userId = req.params.id;
 
-  const name = full_name || fullName;
-  const roles = role_ids || roleIds;
+  await pool.query(
+    `UPDATE users SET full_name = $1, email = $2, department = $3 WHERE id = $4`,
+    [full_name, email, department || null, userId]
+  );
 
-  if (!name || !email)
-    return res.status(400).json({ message: "Full name and email are required." });
+  await assignRoles(userId, role_ids);
 
-  try {
-    const updated = await pool.query(
-      `UPDATE users
-       SET full_name = $1, email = $2, department = $3
-       WHERE id = $4
-       RETURNING id, full_name, email, department`,
-      [name, email, department || null, id]
-    );
+  await logAuditEvent({
+    user_id: req.user.id,
+    action: "update",
+    resource: "users",
+    description: `Updated user ${full_name}`,
+  });
 
-    if (updated.rows.length === 0)
-      return res.status(404).json({ message: "User not found." });
-
-    if (Array.isArray(roles)) {
-      await pool.query("DELETE FROM user_roles WHERE user_id = $1", [id]);
-      for (const rid of roles) {
-        await pool.query(
-          "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-          [id, rid]
-        );
-      }
-    }
-
-    res.status(200).json(updated.rows[0]);
-  } catch (error) {
-    console.error("updateUser Error:", error.message);
-    res.status(500).json({ message: "Server Error" });
-  }
+  res.json({ message: "User updated successfully." });
 };
 
-// -----------------------------------------------------------------------------
-// @desc Delete user
-// -----------------------------------------------------------------------------
+// ----------------------------------------
+// DELETE /api/users/:id
+// ----------------------------------------
 const deleteUser = async (req, res) => {
-  const { id } = req.params;
-  try {
-    await pool.query("DELETE FROM user_roles WHERE user_id = $1", [id]);
-    await pool.query("DELETE FROM users WHERE id = $1", [id]);
-    res.status(200).json({ message: "User deleted successfully." });
-  } catch (error) {
-    console.error("deleteUser Error:", error.message);
-    res.status(500).json({ message: "Server Error" });
-  }
+  const userId = req.params.id;
+
+  await pool.query(`DELETE FROM user_roles WHERE user_id = $1`, [userId]);
+  await pool.query(`DELETE FROM users WHERE id = $1`, [userId]);
+
+  await logAuditEvent({
+    user_id: req.user.id,
+    action: "delete",
+    resource: "users",
+    description: `Deleted user ID ${userId}`,
+  });
+
+  res.json({ message: "User deleted." });
 };
 
-// -----------------------------------------------------------------------------
-// @desc Update logged-in user profile
-// -----------------------------------------------------------------------------
+// ----------------------------------------
+// User Self: Update Profile
+// ----------------------------------------
 const updateUserProfile = async (req, res) => {
-  const { full_name, fullName, email } = req.body;
-  const name = full_name || fullName;
-  const userId = req.user.id;
-
-  try {
-    const result = await pool.query(
-      `UPDATE users
-       SET full_name = $1, email = $2
-       WHERE id = $3
-       RETURNING id, full_name, email, department, profile_image_url`,
-      [name, email, userId]
-    );
-    res.status(200).json(result.rows[0]);
-  } catch (error) {
-    if (error.code === "23505")
-      return res.status(400).json({ message: "This email is already in use." });
-    console.error("updateUserProfile Error:", error.message);
-    res.status(500).json({ message: "Server Error" });
-  }
+  const { full_name, department } = req.body;
+  await pool.query(
+    `UPDATE users SET full_name = $1, department = $2 WHERE id = $3`,
+    [full_name, department, req.user.id]
+  );
+  res.json({ message: "Profile updated." });
 };
 
-// -----------------------------------------------------------------------------
-// @desc Change password
-// -----------------------------------------------------------------------------
+// ----------------------------------------
+// Change Own Password
+// ----------------------------------------
 const changePassword = async (req, res) => {
-  const { oldPassword, newPassword } = req.body;
-  const userId = req.user.id;
-  try {
-    const user = await pool.query("SELECT password_hash FROM users WHERE id = $1", [userId]);
-    if (user.rows.length === 0)
-      return res.status(404).json({ message: "User not found." });
+  const { old_password, new_password } = req.body;
+  const user = await pool.query(`SELECT password_hash FROM users WHERE id = $1`, [req.user.id]);
 
-    const valid = await bcrypt.compare(oldPassword, user.rows[0].password_hash);
-    if (!valid)
-      return res.status(401).json({ message: "Incorrect old password." });
-
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(newPassword, salt);
-    await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, userId]);
-
-    res.status(200).json({ message: "Password changed successfully." });
-  } catch (error) {
-    console.error("changePassword Error:", error.message);
-    res.status(500).json({ message: "Server Error" });
+  if (!(await bcrypt.compare(old_password, user.rows[0].password_hash))) {
+    return res.status(400).json({ message: "Old password incorrect." });
   }
+
+  await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [
+    await bcrypt.hash(new_password, 12),
+    req.user.id,
+  ]);
+
+  res.json({ message: "Password updated." });
 };
 
-// -----------------------------------------------------------------------------
-// @desc Upload profile picture
-// -----------------------------------------------------------------------------
-const uploadProfilePicture = async (req, res) => {
-  const userId = req.user.id;
-
-  if (!req.file)
-    return res.status(400).json({ message: "Please upload an image file." });
-
-  try {
-    const imageUrl = `/uploads/avatars/${req.file.filename}`;
-    const result = await pool.query(
-      `UPDATE users
-       SET profile_image_url = $1
-       WHERE id = $2
-       RETURNING id, full_name, email, department, profile_image_url`,
-      [imageUrl, userId]
-    );
-    res.status(200).json(result.rows[0]);
-  } catch (error) {
-    console.error("uploadProfilePicture Error:", error.message);
-    res.status(500).json({ message: "Server Error" });
-  }
-};
-
-// -----------------------------------------------------------------------------
-// @desc Admin reset password
-// -----------------------------------------------------------------------------
+// ----------------------------------------
+// Admin Set Password
+// ----------------------------------------
 const adminSetPassword = async (req, res) => {
-  const { id } = req.params;
-  const { newPassword } = req.body;
-
-  if (!newPassword)
-    return res.status(400).json({ message: "A new password is required." });
-
-  try {
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(newPassword, salt);
-    await pool.query(
-      "UPDATE users SET password_hash = $1, password_reset_required = TRUE WHERE id = $2",
-      [passwordHash, id]
-    );
-    res.status(200).json({ message: `Password for user ${id} has been reset.` });
-  } catch (error) {
-    console.error("adminSetPassword Error:", error.message);
-    res.status(500).json({ message: "Server Error" });
-  }
+  const { new_password } = req.body;
+  await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [
+    await bcrypt.hash(new_password, 12),
+    req.params.id,
+  ]);
+  res.json({ message: "Password reset successfully." });
 };
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------
+// Upload User Profile Picture
+// ----------------------------------------
+const uploadProfilePicture = async (req, res) => {
+  const url = `/uploads/avatars/${req.file.filename}`;
+  await pool.query(`UPDATE users SET profile_image_url = $1 WHERE id = $2`, [
+    url,
+    req.user.id,
+  ]);
+  res.json({ message: "Profile picture updated.", url });
+};
+
 module.exports = {
   getUserProfile,
-  getDoctors,
   getAllUsers,
   getActiveUsers,
+  getDoctors,
   createUser,
   updateUser,
   deleteUser,
@@ -364,5 +219,4 @@ module.exports = {
   changePassword,
   uploadProfilePicture,
   adminSetPassword,
-  recordLogin, // exported for login controller use
 };

@@ -1,0 +1,19 @@
+# ------------------------------------------------------------
+# Development image – Vite dev server
+# ------------------------------------------------------------
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install dependencies (cached)
+COPY package*.json ./
+RUN npm install --legacy-peer-deps
+
+# Copy source
+COPY . .
+
+# Expose Vite default port
+EXPOSE 5173
+
+# Run Vite in host-binding mode (accessible from host & other containers)
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

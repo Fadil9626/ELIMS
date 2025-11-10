@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+// frontend/src/components/admin/AddEditStaffModal.jsx
+import React, { useEffect, useState } from "react";
 import rolesService from "../../services/rolesService";
 import { HiChevronDown, HiChevronUp, HiShieldCheck } from "react-icons/hi";
 
@@ -12,7 +13,7 @@ const AddEditStaffModal = ({ isOpen, onClose, onSave, userData }) => {
     roleIds: [],
   });
 
-  const [roles, setRoles] = useState([]);
+  const [roles, setRoles] = useState([]); // always an array
   const [permissionsView, setPermissionsView] = useState(false);
   const [rolePermissions, setRolePermissions] = useState({});
   const [loadingRoles, setLoadingRoles] = useState(false);
@@ -21,55 +22,41 @@ const AddEditStaffModal = ({ isOpen, onClose, onSave, userData }) => {
   const token = JSON.parse(localStorage.getItem("userInfo"))?.token || null;
 
   useEffect(() => {
-    if (isOpen) {
-      (async () => {
-        setLoadingRoles(true);
-        try {
-          const list = await rolesService.listRoles(token);
-          if (Array.isArray(list) && list.length > 0) setRoles(list);
-          else
-            setRoles([
-              { id: 1, name: "Super Administrator" },
-              { id: 2, name: "Administrator" },
-              { id: 3, name: "Pathologist" },
-              { id: 4, name: "Receptionist" },
-              { id: 5, name: "Doctor" },
-              { id: 6, name: "Phlebotomist" },
-            ]);
-        } catch {
-          setRoles([
-            { id: 1, name: "Super Administrator" },
-            { id: 2, name: "Administrator" },
-            { id: 3, name: "Pathologist" },
-            { id: 4, name: "Receptionist" },
-            { id: 5, name: "Doctor" },
-            { id: 6, name: "Phlebotomist" },
-          ]);
-        } finally {
-          setLoadingRoles(false);
-        }
-      })();
-    }
-  }, [isOpen]);
+    if (!isOpen) return;
+    (async () => {
+      setLoadingRoles(true);
+      try {
+        const list = await rolesService.listRoles(token);
+        const normalized = Array.isArray(list) ? list : [];
+        setRoles(normalized);
+      } catch {
+        setRoles([]);
+      } finally {
+        setLoadingRoles(false);
+      }
+    })();
+  }, [isOpen, token]);
 
   useEffect(() => {
-    if (isOpen) {
-      if (isEditMode) {
-        setFormData({
-          fullName: userData.full_name || "",
-          email: userData.email || "",
-          password: "",
-          roleIds: Array.isArray(userData.roles)
-            ? userData.roles.map((r) => r.id)
-            : userData.role_id
-            ? [userData.role_id]
-            : [],
-        });
-      } else {
-        setFormData({ fullName: "", email: "", password: "", roleIds: [] });
-      }
+    if (!isOpen) return;
+
+    if (isEditMode) {
+      setFormData({
+        fullName: userData.full_name || "",
+        email: userData.email || "",
+        password: "",
+        roleIds: Array.isArray(userData.role_ids)
+          ? userData.role_ids
+          : Array.isArray(userData.roles)
+          ? userData.roles.map((r) => r.id)
+          : userData.role_id
+          ? [userData.role_id]
+          : [],
+      });
+    } else {
+      setFormData({ fullName: "", email: "", password: "", roleIds: [] });
     }
-  }, [isOpen, userData, isEditMode]);
+  }, [isOpen, isEditMode, userData]);
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -78,18 +65,31 @@ const AddEditStaffModal = ({ isOpen, onClose, onSave, userData }) => {
   const handleRoleChange = (e) => {
     const selected = Array.from(e.target.selectedOptions, (opt) =>
       parseInt(opt.value, 10)
-    );
+    ).filter((n) => Number.isFinite(n));
     setFormData({ ...formData, roleIds: selected });
   };
 
   const loadPermissions = async () => {
-    if (!formData.roleIds.length) return;
+    if (!formData.roleIds.length) {
+      setRolePermissions({});
+      return;
+    }
     setLoadingPerms(true);
     const perms = {};
     for (const id of formData.roleIds) {
       try {
         const grants = await rolesService.getRolePermissions(id, token);
-        perms[id] = grants;
+        // normalize: controller returns array of {resource, action} or array of "res:act"
+        const normalized =
+          Array.isArray(grants) && grants.length && typeof grants[0] === "string"
+            ? grants.map((g) => {
+                const [resource, action] = g.split(":");
+                return { resource, action };
+              })
+            : Array.isArray(grants)
+            ? grants
+            : [];
+        perms[id] = normalized;
       } catch {
         perms[id] = [];
       }
@@ -103,7 +103,7 @@ const AddEditStaffModal = ({ isOpen, onClose, onSave, userData }) => {
     const payload = {
       full_name: formData.fullName?.trim() || userData?.full_name || "",
       email: formData.email?.trim(),
-      role_ids: formData.roleIds,
+      role_ids: formData.roleIds, // backend will write user_roles
     };
     if (!isEditMode && formData.password?.trim()) {
       payload.password = formData.password.trim();
@@ -114,7 +114,7 @@ const AddEditStaffModal = ({ isOpen, onClose, onSave, userData }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50 backdrop-blur-sm">
+    <div className="fixed inset-0 bg-black/40 flex justify-center items-center z-50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 ring-1 ring-gray-200">
         <h2 className="text-xl font-semibold mb-4 text-gray-900">
           {isEditMode ? "Edit Staff Member" : "Add New Staff"}
@@ -159,7 +159,7 @@ const AddEditStaffModal = ({ isOpen, onClose, onSave, userData }) => {
               <div className="text-sm text-gray-500 border border-gray-300 rounded-md p-2 bg-gray-50">
                 Loading roles…
               </div>
-            ) : (
+            ) : roles.length ? (
               <select
                 name="roleIds"
                 multiple
@@ -170,10 +170,14 @@ const AddEditStaffModal = ({ isOpen, onClose, onSave, userData }) => {
               >
                 {roles.map((role) => (
                   <option key={role.id} value={role.id}>
-                    {role.name}
+                    {role.name} {role.core ? " (System)" : ""}
                   </option>
                 ))}
               </select>
+            ) : (
+              <div className="text-sm text-rose-600">
+                No roles available. Create roles first in RBAC.
+              </div>
             )}
             <p className="text-xs text-gray-500 mt-1">
               Hold <kbd>Ctrl</kbd> (or <kbd>Cmd</kbd> on Mac) to select multiple.
@@ -184,12 +188,12 @@ const AddEditStaffModal = ({ isOpen, onClose, onSave, userData }) => {
             <div className="mt-3 border-t pt-3">
               <button
                 type="button"
-                disabled={loadingRoles}
                 onClick={() => {
-                  setPermissionsView(!permissionsView);
-                  if (!permissionsView) loadPermissions();
+                  const willOpen = !permissionsView;
+                  setPermissionsView(willOpen);
+                  if (willOpen) loadPermissions();
                 }}
-                className="flex items-center text-sm text-indigo-600 hover:text-indigo-800 disabled:text-gray-400"
+                className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800"
               >
                 {permissionsView ? (
                   <>
@@ -205,9 +209,7 @@ const AddEditStaffModal = ({ isOpen, onClose, onSave, userData }) => {
               {permissionsView && (
                 <div className="mt-3 bg-gray-50 p-3 rounded-lg border border-gray-200 max-h-56 overflow-y-auto text-sm">
                   {loadingPerms ? (
-                    <div className="text-gray-500 italic">
-                      Loading permissions…
-                    </div>
+                    <div className="text-gray-500 italic">Loading permissions…</div>
                   ) : (
                     formData.roleIds.map((rid) => {
                       const role = roles.find((r) => r.id === rid);
@@ -222,15 +224,12 @@ const AddEditStaffModal = ({ isOpen, onClose, onSave, userData }) => {
                             <ul className="list-disc ml-6 text-gray-600 text-xs mt-1">
                               {grants.map((g, i) => (
                                 <li key={i}>
-                                  {g.resource}:{" "}
-                                  <span className="font-mono">{g.action}</span>
+                                  {g.resource}: <span className="font-mono">{g.action}</span>
                                 </li>
                               ))}
                             </ul>
                           ) : (
-                            <div className="text-xs text-gray-500 ml-6">
-                              No permissions found
-                            </div>
+                            <div className="text-xs text-gray-500 ml-6">No permissions found</div>
                           )}
                         </div>
                       );

@@ -1,24 +1,38 @@
-// backend/routes/authRoutes.js
-const express = require('express');
+// ============================================================
+// AUTH ROUTES
+// /api/login  → public
+// /api/register → protected (admin only)
+// /api/me     → protected
+// ============================================================
+
+const express = require("express");
 const router = express.Router();
-const { registerUser, loginUser } = require('../controllers/authController');
 
-/**
- * ==========================================================
- * @route   POST /api/auth/register
- * @desc    Register a new user
- * @access  Private (Admin only)
- * ==========================================================
- */
-router.post('/register', registerUser);
+// Import controller functions
+const {
+  registerUser,
+  loginUser,
+  getMe,
+} = require("../controllers/authController");
 
-/**
- * ==========================================================
- * @route   POST /api/auth/login
- * @desc    Log in an existing user
- * @access  Public
- * ==========================================================
- */
-router.post('/login', loginUser);
+// Import auth middleware
+const { protect } = require("../middleware/authMiddleware");
 
+// ---------------------------------------------------
+// PUBLIC ROUTES
+// ---------------------------------------------------
+router.post("/login", loginUser);
+
+// ---------------------------------------------------
+// PROTECTED ROUTES
+// ---------------------------------------------------
+// Register new user (admin only)
+router.post("/register", protect, registerUser);
+
+// Get current user
+router.get("/me", protect, getMe);
+
+// ---------------------------------------------------
+// EXPORT
+// ---------------------------------------------------
 module.exports = router;

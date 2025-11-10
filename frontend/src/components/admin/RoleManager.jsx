@@ -1,5 +1,5 @@
 // frontend/src/components/roles/RoleManager.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"; // 💡 FIX: Added useCallback
 import rolesService from "../../services/rolesService";
 import AddEditRoleModal from "./AddEditRoleModal";
 import ConfirmModal from "../layout/ConfirmModal";
@@ -16,7 +16,11 @@ import {
   HiUpload,
   HiCheck,
   HiInformationCircle,
+  HiOutlineChevronLeft,
+  HiOutlineChevronRight,
+  HiX,
 } from "react-icons/hi";
+import toast from "react-hot-toast";
 
 /* --------------------------------- helpers -------------------------------- */
 
@@ -74,7 +78,7 @@ function markMatrixFromGrants(empty, granted /* array of {resource,action} */) {
 function normalizeRoles(resp) {
   if (Array.isArray(resp)) return resp;
   if (resp && Array.isArray(resp.items)) return resp.items; // controller shape
-  if (resp && Array.isArray(resp.rows)) return resp.rows;   // raw SQL shape
+  if (resp && Array.isArray(resp.rows)) return resp.rows;   // raw SQL shape
   if (resp && typeof resp === "object") {
     // last resort: return the first array value found
     for (const v of Object.values(resp)) if (Array.isArray(v)) return v;
@@ -96,15 +100,13 @@ const RoleBadge = ({ core }) =>
 /* --------------------------------- component -------------------------------- */
 
 const RoleManager = () => {
-  const [roles, setRoles] = useState([]);             // always an array after normalize
-  const [catalog, setCatalog] = useState([]);         // [{id,resource,action}]
+  const [roles, setRoles] = useState([]);             
+  const [catalog, setCatalog] = useState([]);         
   const [selectedRole, setSelectedRole] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
-
-  const [banner, setBanner] = useState({ type: "none", msg: "" });
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingRole, setEditingRole] = useState(null);
@@ -131,12 +133,16 @@ const RoleManager = () => {
 
   const dirty = useMemo(() => !equalMatrix(matrix, original), [matrix, original]);
 
-  const showBanner = (type, msg, ms = 2500) => {
-    setBanner({ type, msg });
-    if (ms) setTimeout(() => setBanner({ type: "none", msg: "" }), ms);
+  // Unified toast function
+  const showNotification = (type, msg, ms = 2500) => {
+    if (type === "success") {
+      toast.success(msg, { duration: ms });
+    } else if (type === "error") {
+      toast.error(msg, { duration: ms });
+    }
   };
 
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -173,10 +179,11 @@ const RoleManager = () => {
       }
     } catch (err) {
       setError(err.message || "Failed to load roles/permissions");
+      showNotification("error", err.message || "Failed to load roles.");
     } finally {
       setLoading(false);
     }
-  }
+  }, [token, selectedRole?.id, emptyMatrix]);
 
   useEffect(() => {
     loadAll();
@@ -185,13 +192,25 @@ const RoleManager = () => {
 
   const onPickRole = async (role) => {
     setSelectedRole(role);
+    // If we have unsaved changes, ask user before switching
+    if (dirty) {
+        if (!window.confirm("You have unsaved changes. Discard and switch roles?")) {
+            return;
+        }
+    }
+    
+    // Reset matrix state locally before loading new role
+    const empty = buildEmptyMatrix(catalog);
+    setMatrix(cloneMatrix(empty)); 
+    setOriginal(cloneMatrix(empty)); 
+
     try {
       const grants = await rolesService.getRolePermissions(role.id, token); // array
       const m = markMatrixFromGrants(emptyMatrix, grants);
       setMatrix(m);
       setOriginal(cloneMatrix(m));
     } catch (e) {
-      showBanner("error", e.message || "Failed to load role permissions", 3000);
+      showNotification("error", e.message || "Failed to load role permissions", 3000);
     }
   };
 
@@ -217,9 +236,9 @@ const RoleManager = () => {
       }
       closeEdit();
       await loadAll();
-      showBanner("success", "Role saved.");
+      showNotification("success", "Role saved.");
     } catch (e) {
-      showBanner("error", e.message || "Failed to save role", 3000);
+      showNotification("error", e.message || "Failed to save role", 3000);
     }
   };
 
@@ -229,11 +248,11 @@ const RoleManager = () => {
       setIsDeleteModalOpen(false);
       setRoleToDelete(null);
       await loadAll();
-      showBanner("success", "Role deleted.");
+      showNotification("success", "Role deleted.");
     } catch (e) {
       setIsDeleteModalOpen(false);
       setRoleToDelete(null);
-      showBanner("error", e.message || "Failed to delete role", 3000);
+      showNotification("error", e.message || "Failed to delete role", 3000);
     }
   };
 
@@ -270,9 +289,9 @@ const RoleManager = () => {
       const flat = flattenMatrix(matrix); // ["resource:action"]
       await rolesService.setRolePermissions(selectedRole.id, flat, token);
       setOriginal(cloneMatrix(matrix));
-      showBanner("success", "Permissions updated.");
+      showNotification("success", "Permissions updated.");
     } catch (e) {
-      showBanner("error", e.message || "Failed to save.", 3000);
+      showNotification("error", e.message || "Failed to save.", 3000);
     } finally {
       setSaving(false);
     }
@@ -281,16 +300,22 @@ const RoleManager = () => {
   const resetChanges = () => setMatrix(cloneMatrix(original));
 
   const copyFrom = async (id) => {
-    if (!id) return;
+    if (!id || locked(selectedRole)) return;
+    
+    // Confirm if dirty
+    if (dirty && !window.confirm("Copying permissions will overwrite unsaved changes. Continue?")) {
+        return;
+    }
+
     const r = (roles || []).find((x) => x.id === Number(id));
     if (!r) return;
     try {
       const grants = await rolesService.getRolePermissions(r.id, token);
       const m = markMatrixFromGrants(emptyMatrix, grants);
       setMatrix(m);
-      showBanner("success", "Copied—review and Save.");
+      showNotification("success", `Copied permissions from ${r.name}—review and Save.`);
     } catch (e) {
-      showBanner("error", e.message || "Copy failed", 3000);
+      showNotification("error", e.message || "Copy failed", 3000);
     }
   };
 
@@ -307,16 +332,23 @@ const RoleManager = () => {
     a.download = `${(selectedRole?.name || "role").toLowerCase().replace(/\s+/g, "_")}_permissions.json`;
     a.click();
     URL.revokeObjectURL(url);
+    showNotification("success", "Permissions exported.");
   };
 
   const importJSON = async (e) => {
     const f = e.target.files?.[0];
     e.target.value = "";
-    if (!f) return;
+    if (!f || locked(selectedRole)) return;
+    
+    // Confirm if dirty
+    if (dirty && !window.confirm("Importing permissions will overwrite unsaved changes. Continue?")) {
+        return;
+    }
+
     try {
       const txt = await f.text();
       const json = JSON.parse(txt);
-      if (!json?.permissions) throw new Error("Invalid file");
+      if (!json?.permissions) throw new Error("Invalid file structure. Expecting a 'permissions' object.");
 
       // Only accept keys present in the current catalog
       const clean = cloneMatrix(emptyMatrix);
@@ -329,9 +361,9 @@ const RoleManager = () => {
         }
       }
       setMatrix(clean);
-      showBanner("success", "Imported—review and Save.");
-    } catch {
-      showBanner("error", "Import failed. Use a valid JSON export.", 3500);
+      showNotification("success", "Permissions imported—review and Save.");
+    } catch (e) {
+      showNotification("error", e.message || "Import failed. Use a valid JSON export.", 3500);
     }
   };
 
@@ -354,14 +386,22 @@ const RoleManager = () => {
   }, [catalog]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="rounded-2xl bg-gradient-to-r from-indigo-50 via-white to-rose-50 ring-1 ring-gray-200 p-4 flex items-center justify-between">
+      <div className="rounded-2xl bg-gradient-to-r from-indigo-50 via-white to-rose-50 ring-1 ring-gray-200 p-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">Role-Based Access Control</h2>
+          <h2 className="text-2xl font-bold text-gray-900">Role-Based Access Control</h2>
           <p className="text-sm text-gray-600">Create roles, fine-tune permissions, and keep your system secure.</p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => loadAll()}
+            disabled={loading || saving}
+            className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm ring-1 ring-gray-300 hover:bg-gray-50 disabled:opacity-50"
+            title="Refresh roles list and current permissions"
+          >
+            <HiRefresh className="h-5 w-5" /> Refresh All
+          </button>
           <button
             onClick={() => openEdit()}
             className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 text-white px-3 py-2 hover:bg-indigo-700"
@@ -371,21 +411,10 @@ const RoleManager = () => {
         </div>
       </div>
 
-      {banner.type !== "none" && (
-        <div
-          className={`rounded-lg px-3 py-2 text-sm ${
-            banner.type === "success"
-              ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-              : "bg-rose-50 text-rose-700 ring-1 ring-rose-200"
-          }`}
-        >
-          {banner.msg}
-        </div>
-      )}
-
+      {/* Main Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: roles list */}
-        <div className="bg-white rounded-2xl shadow-sm ring-1 ring-gray-200 p-4">
+        <div className="bg-white rounded-2xl shadow-sm ring-1 ring-gray-200 p-4 lg:col-span-1">
           <div className="relative mb-3">
             <HiSearch className="absolute left-3 top-2.5 h-5 w-5 text-gray-400" />
             <input
@@ -408,8 +437,9 @@ const RoleManager = () => {
             <ul className="space-y-1 max-h-[520px] overflow-y-auto pr-1">
               {filtered.map((r) => {
                 const active = selectedRole?.id === r.id;
+                const core = isCore(r);
                 return (
-                  <li key={r.id} className="group">
+                  <li key={r.id}>
                     <button
                       onClick={() => onPickRole(r)}
                       className={`w-full text-left px-3 py-2 rounded-xl transition ${
@@ -417,9 +447,9 @@ const RoleManager = () => {
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <div className="truncate">{r.name}</div>
+                        <div className="truncate font-medium">{r.name}</div>
                         <div className="flex items-center gap-2">
-                          <RoleBadge core={isCore(r)} />
+                          <RoleBadge core={core} />
                           {typeof r.user_count === "number" && (
                             <span className={`inline-flex items-center gap-1 text-xs ${active ? "text-indigo-100" : "text-gray-500"}`}>
                               <HiUserGroup className="h-4 w-4" /> {r.user_count}
@@ -428,24 +458,25 @@ const RoleManager = () => {
                         </div>
                       </div>
                     </button>
-
-                    {!isCore(r) && (
-                      <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 mt-1 pl-1">
-                        <button
-                          className="p-1.5 text-gray-500 hover:text-indigo-600"
-                          title="Rename"
-                          onClick={() => openEdit(r)}
-                        >
-                          <HiPencil />
-                        </button>
-                        <button
-                          className="p-1.5 text-gray-500 hover:text-rose-600"
-                          title="Delete"
-                          onClick={() => openDelete(r)}
-                        >
-                          <HiTrash />
-                        </button>
-                      </div>
+                    
+                    {/* 💡 FIX 1: Dedicated action bar below the active role */}
+                    {active && !core && (
+                        <div className="flex items-center gap-2 mt-1 pl-3 pb-2 border-b border-indigo-100">
+                            <button
+                                className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800"
+                                title="Rename Role"
+                                onClick={() => openEdit(r)}
+                            >
+                                <HiPencil className="h-4 w-4" /> Rename
+                            </button>
+                            <button
+                                className="inline-flex items-center gap-1 text-xs text-rose-600 hover:text-rose-800"
+                                title="Delete Role"
+                                onClick={() => openDelete(r)}
+                            >
+                                <HiTrash className="h-4 w-4" /> Delete
+                            </button>
+                        </div>
                     )}
                   </li>
                 );
@@ -454,7 +485,7 @@ const RoleManager = () => {
             </ul>
           )}
 
-          <div className="mt-4 text-xs text-gray-500 flex items-start gap-1">
+          <div className="mt-4 text-xs text-gray-500 flex items-start gap-1 pt-4 border-t border-gray-100">
             <HiInformationCircle className="h-4 w-4 mt-0.5" />
             System roles are protected and cannot be removed. SuperAdmin is read-only.
           </div>
@@ -467,20 +498,20 @@ const RoleManager = () => {
           ) : (
             <>
               {/* Toolbar */}
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <div className="text-lg font-semibold">
-                    {selectedRole.name}
-                    {locked(selectedRole) && <span className="ml-2 text-xs text-gray-500">(locked)</span>}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3 mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="text-xl font-bold text-gray-900">
+                    {selectedRole.name} Permissions
+                    {locked(selectedRole) && <span className="ml-2 text-sm text-gray-500">(locked)</span>}
                   </div>
-                  <RoleBadge core={isCore(selectedRole)} />
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1">
+                  {/* Copy/Export/Import Group */}
+                  <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gray-50 ring-1 ring-gray-200 text-sm">
                     <HiDuplicate className="text-gray-500" />
                     <select
-                      className="rounded-lg border-gray-300 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                      className="bg-transparent border-0 text-gray-700 p-0 focus:ring-0 focus:border-0"
                       disabled={locked(selectedRole)}
                       defaultValue=""
                       onChange={(e) => copyFrom(e.target.value)}
@@ -498,18 +529,7 @@ const RoleManager = () => {
                         ))}
                     </select>
                   </div>
-
-                  <button
-                    onClick={resetChanges}
-                    disabled={!dirty}
-                    className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm ring-1 ${
-                      dirty ? "text-gray-800 ring-gray-300 hover:bg-gray-50" : "text-gray-400 ring-gray-200 cursor-not-allowed"
-                    }`}
-                    title="Reset unsaved changes"
-                  >
-                    <HiRefresh /> Reset
-                  </button>
-
+                  
                   <button
                     onClick={exportJSON}
                     className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm ring-1 ring-gray-300 hover:bg-gray-50"
@@ -527,46 +547,61 @@ const RoleManager = () => {
                   >
                     <HiUpload /> Import
                   </button>
-
-                  <button
-                    onClick={savePermissions}
-                    disabled={locked(selectedRole) || !dirty || saving}
-                    className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-white ${
-                      locked(selectedRole) || !dirty || saving ? "bg-gray-400 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"
-                    }`}
-                  >
-                    {saving ? (
-                      <>
-                        <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                        </svg>
-                        Saving…
-                      </>
-                    ) : (
-                      <>
-                        <HiCheck className="h-5 w-5" /> Save
-                      </>
-                    )}
-                  </button>
                 </div>
               </div>
+              
+              {/* Save/Reset Controls */}
+              <div className="flex justify-end gap-3 mb-4">
+                <button
+                  onClick={resetChanges}
+                  disabled={!dirty}
+                  className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm ring-1 ${
+                    dirty ? "text-gray-800 ring-gray-300 hover:bg-gray-50" : "text-gray-400 ring-gray-200 cursor-not-allowed"
+                  }`}
+                  title="Reset unsaved changes"
+                >
+                    <HiRefresh className="h-5 w-5" /> Reset Changes
+                </button>
+                
+                <button
+                  onClick={savePermissions}
+                  disabled={locked(selectedRole) || !dirty || saving}
+                  className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-white shadow-md transition ${
+                    locked(selectedRole) || !dirty || saving ? "bg-gray-400 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"
+                  }`}
+                >
+                  {saving ? (
+                    <>
+                      <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                      Saving…
+                    </>
+                  ) : (
+                    <>
+                      <HiCheck className="h-5 w-5" /> Save Permissions
+                    </>
+                  )}
+                </button>
+              </div>
+
 
               {/* Matrix */}
               <div className="mt-4 overflow-auto">
-                <table className="min-w-full text-sm border-separate border-spacing-y-2">
+                <table className="min-w-full text-sm border-collapse border-spacing-y-2">
                   <thead className="sticky top-0 z-10">
-                    <tr>
-                      <th className="bg-gray-50 text-left p-2 rounded-l-lg font-medium">Resource</th>
+                    <tr className="bg-gray-100 rounded-lg">
+                      <th className="bg-gray-100 text-left p-2 rounded-l-lg font-medium">Resource</th>
                       {actions.map((a) => {
                         const colAll = Object.keys(matrix || {}).every((res) => matrix?.[res]?.[a]);
                         return (
-                          <th key={a} className="bg-gray-50 p-2 text-center font-medium capitalize">
+                          <th key={a} className="bg-gray-100 p-2 text-center font-medium capitalize">
                             <div className="flex flex-col items-center gap-1">
                               <span>{a}</span>
                               <input
                                 type="checkbox"
-                                className="h-4 w-4"
+                                className="h-4 w-4 text-indigo-600 rounded focus:ring-indigo-500"
                                 checked={!!colAll}
                                 onChange={(e) => toggleColAll(a, e.target.checked)}
                                 disabled={locked(selectedRole)}
@@ -576,17 +611,17 @@ const RoleManager = () => {
                           </th>
                         );
                       })}
-                      <th className="bg-gray-50 p-2 text-center rounded-r-lg font-medium">Row</th>
+                      <th className="bg-gray-100 p-2 text-center rounded-r-lg font-medium">Row</th>
                     </tr>
                   </thead>
                   <tbody>
                     {resources.map((res, i) => {
                       const rowAll = Object.values(matrix?.[res] || {}).every(Boolean);
                       return (
-                        <tr key={res} className={i % 2 ? "bg-gray-50" : "bg-white"}>
-                          <td className="p-2 rounded-l-lg font-semibold">{res}</td>
+                        <tr key={res} className="ring-1 ring-gray-100 hover:ring-indigo-200 transition-all">
+                          <td className="p-2 pl-3 rounded-l-lg font-semibold capitalize bg-white">{res}</td>
                           {actions.map((a) => (
-                            <td key={a} className="p-2 text-center">
+                            <td key={a} className="p-2 text-center bg-white">
                               <input
                                 type="checkbox"
                                 className="h-5 w-5 text-indigo-600 rounded focus:ring-indigo-500"
@@ -596,7 +631,7 @@ const RoleManager = () => {
                               />
                             </td>
                           ))}
-                          <td className="p-2 text-center rounded-r-lg">
+                          <td className="p-2 text-center rounded-r-lg bg-white">
                             <label className="inline-flex items-center gap-2 text-xs text-gray-600">
                               <input
                                 type="checkbox"
@@ -615,12 +650,6 @@ const RoleManager = () => {
                 </table>
               </div>
 
-              {locked(selectedRole) && (
-                <div className="mt-3 text-xs text-gray-500 flex items-center gap-1">
-                  <HiInformationCircle className="h-4 w-4" />
-                  Super Administrator is read-only and has full access.
-                </div>
-              )}
             </>
           )}
         </div>

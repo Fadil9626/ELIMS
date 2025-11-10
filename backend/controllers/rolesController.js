@@ -1,3 +1,4 @@
+// backend/controllers/rolesController.js
 const pool = require("../config/database");
 
 // ---- Config ----
@@ -14,7 +15,6 @@ const CORE_ROLE_NAMES = new Set([
 // Helpers
 // ────────────────────────────────────────────────────────────
 function parsePermStrings(permsInput) {
-  // Accept array of strings ["results:view", "users:manage"] OR array of objects [{resource, action}]
   if (!permsInput) return [];
   if (Array.isArray(permsInput)) {
     return permsInput
@@ -35,42 +35,93 @@ function parsePermStrings(permsInput) {
   return [];
 }
 
+/**
+ * Ensure all (resource, action) pairs exist in the permissions table.
+ * Your table shape (per \d permissions):
+ *   id, name NOT NULL, code NOT NULL UNIQUE, resource NOT NULL, action NOT NULL, created_at
+ *
+ * We will:
+ * - look up by (resource, action)
+ * - when inserting, also populate name and code
+ *   code:  `${resource}.${action}`
+ *   name:  Human-readable like `Patients: View`
+ */
 async function ensurePermissions(client, perms) {
-  // Insert permissions if missing; return map (resource:action) -> permission_id
-  const keySet = new Set(perms.map((p) => `${p.resource}:${p.action}`));
+  const pairs = perms.map((p) => [p.resource, p.action]);
+  const keySet = new Set(pairs.map(([r, a]) => `${r}:${a}`));
   if (keySet.size === 0) return new Map();
 
-  // Fetch existing
+  // 1) Fetch existing by (resource, action)
+  const flatParams = [];
+  const tupleHolders = [];
+  [...keySet].forEach((k, i) => {
+    const [r, a] = k.split(":");
+    flatParams.push(r, a);
+    tupleHolders.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
+  });
+
   const { rows: existing } = await client.query(
-    `SELECT id, resource, action FROM permissions
-      WHERE (resource, action) IN (${[...keySet].map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(",")})`,
-    [...[...keySet].flatMap((k) => k.split(":"))]
+    `SELECT id, resource, action
+       FROM permissions
+      WHERE (resource, action) IN (${tupleHolders.join(",")})`,
+    flatParams
   );
+
   const map = new Map(existing.map((r) => [`${r.resource}:${r.action}`, r.id]));
 
-  // Insert missing
+  // 2) Insert missing with required columns (name, code)
   const missing = perms.filter((p) => !map.has(`${p.resource}:${p.action}`));
   if (missing.length) {
-    const values = missing.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(",");
-    const params = missing.flatMap((p) => [p.resource, p.action]);
+    const vHolders = [];
+    const vParams = [];
+    missing.forEach((p, i) => {
+      const code = `${p.resource}.${p.action}`; // unique
+      const name = `${p.resource.charAt(0).toUpperCase() + p.resource.slice(1)}: ${p.action.charAt(0).toUpperCase() + p.action.slice(1)}`;
+      // (name, code, resource, action)
+      vHolders.push(`($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`);
+      vParams.push(name, code, p.resource, p.action);
+    });
+
     const { rows: inserted } = await client.query(
-      `INSERT INTO permissions (resource, action) VALUES ${values} RETURNING id, resource, action`,
-      params
+      `INSERT INTO permissions (name, code, resource, action)
+       VALUES ${vHolders.join(",")}
+       ON CONFLICT (code) DO NOTHING
+       RETURNING id, resource, action`,
+      vParams
     );
-    for (const r of inserted) map.set(`${r.resource}:${r.action}`, r.id);
+
+    for (const r of inserted) {
+      map.set(`${r.resource}:${r.action}`, r.id);
+    }
+
+    // In case some rows already existed by code, fetch them to fill the map
+    if (inserted.length < missing.length) {
+      const again = await client.query(
+        `SELECT id, resource, action
+           FROM permissions
+          WHERE (resource, action) IN (${tupleHolders.join(",")})`,
+        flatParams
+      );
+      for (const r of again.rows) {
+        map.set(`${r.resource}:${r.action}`, r.id);
+      }
+    }
   }
 
   return map;
 }
 
 async function fetchRoleWithPermissions(client, roleId) {
-  const { rows: roleRows } = await client.query(`SELECT id, name, description FROM roles WHERE id = $1`, [roleId]);
+  const { rows: roleRows } = await client.query(
+    `SELECT id, name, description, core FROM roles WHERE id = $1`,
+    [roleId]
+  );
   if (!roleRows.length) return null;
 
   const { rows: perms } = await client.query(
     `SELECT p.resource, p.action
-      FROM role_permissions rp
-      JOIN permissions p ON p.id = rp.permission_id
+       FROM role_permissions rp
+       JOIN permissions p ON p.id = rp.permission_id
       WHERE rp.role_id = $1
       ORDER BY p.resource, p.action`,
     [roleId]
@@ -80,6 +131,7 @@ async function fetchRoleWithPermissions(client, roleId) {
     id: roleRows[0].id,
     name: roleRows[0].name,
     description: roleRows[0].description || null,
+    core: !!roleRows[0].core,
     permissions: perms.map((p) => `${p.resource}:${p.action}`),
   };
 }
@@ -101,7 +153,7 @@ const getRoles = async (req, res) => {
     const q = `%${String(search).trim()}%`;
 
     const { rows: roles } = await pool.query(
-      `SELECT id, name, description
+      `SELECT id, name, description, core
          FROM roles
         WHERE ($1 = '%%' OR name ILIKE $1)
         ORDER BY id
@@ -109,7 +161,7 @@ const getRoles = async (req, res) => {
       [q, lim, off]
     );
 
-    // Attach permissions per role
+    // attach permissions to each role (optional)
     const roleIds = roles.map((r) => r.id);
     let permsByRole = new Map();
     if (roleIds.length) {
@@ -132,6 +184,7 @@ const getRoles = async (req, res) => {
       id: r.id,
       name: r.name,
       description: r.description || null,
+      core: !!r.core,
       permissions: permsByRole.get(r.id) || [],
     }));
 
@@ -170,15 +223,18 @@ const createRole = async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // unique name
-    const { rowCount: nameTaken } = await client.query(`SELECT 1 FROM roles WHERE LOWER(name)=LOWER($1)`, [name]);
+    const { rowCount: nameTaken } = await client.query(
+      `SELECT 1 FROM roles WHERE LOWER(name)=LOWER($1)`,
+      [name]
+    );
     if (nameTaken) {
       await client.query("ROLLBACK");
       return res.status(400).json({ message: `A role with the name '${name}' already exists.` });
     }
 
     const { rows: roleRows } = await client.query(
-      `INSERT INTO roles (name, description) VALUES ($1, $2) RETURNING id, name, description`,
+      `INSERT INTO roles (name, description) VALUES ($1, $2)
+       RETURNING id, name, description, core`,
       [name.trim(), description]
     );
 
@@ -190,10 +246,12 @@ const createRole = async (req, res) => {
         const ids = [...new Set(perms.map((p) => permIdMap.get(`${p.resource}:${p.action}`)).filter(Boolean))];
         if (ids.length) {
           const values = ids.map((_, i) => `($1, $${i + 2})`).join(",");
-          await client.query(`INSERT INTO role_permissions (role_id, permission_id) VALUES ${values} ON CONFLICT DO NOTHING`, [
-            roleId,
-            ...ids,
-          ]);
+          await client.query(
+            `INSERT INTO role_permissions (role_id, permission_id)
+             VALUES ${values}
+             ON CONFLICT DO NOTHING`,
+            [roleId, ...ids]
+          );
         }
       }
     }
@@ -203,9 +261,8 @@ const createRole = async (req, res) => {
     const result = await fetchRoleWithPermissions(client, roleId);
     res.status(201).json(result);
   } catch (error) {
-    await pool.query("ROLLBACK");
+    await client.query("ROLLBACK");
     console.error("createRole error:", error);
-    // Duplicate name fallback
     if (error.code === "23505") {
       return res.status(400).json({ message: `A role with the name '${name}' already exists.` });
     }
@@ -224,8 +281,10 @@ const updateRole = async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // Fetch current
-    const { rows: currentRows } = await client.query(`SELECT id, name FROM roles WHERE id = $1`, [id]);
+    const { rows: currentRows } = await client.query(
+      `SELECT id, name, core FROM roles WHERE id = $1`,
+      [id]
+    );
     if (!currentRows.length) {
       await client.query("ROLLBACK");
       return res.status(404).json({ message: "Role not found." });
@@ -233,13 +292,11 @@ const updateRole = async (req, res) => {
     const current = currentRows[0];
     const targetName = (name ?? current.name).trim();
 
-    // Prevent core role renaming to empty or dangerous values
     if (isCoreRoleName(current.name) && !targetName) {
       await client.query("ROLLBACK");
       return res.status(400).json({ message: "Core role must have a valid name." });
     }
 
-    // Check duplicate name
     if (targetName && targetName.toLowerCase() !== current.name.toLowerCase()) {
       const { rowCount: taken } = await client.query(
         `SELECT 1 FROM roles WHERE LOWER(name) = LOWER($1) AND id <> $2`,
@@ -251,9 +308,11 @@ const updateRole = async (req, res) => {
       }
     }
 
-    await client.query(`UPDATE roles SET name=$1, description=$2 WHERE id=$3`, [targetName, description, id]);
+    await client.query(
+      `UPDATE roles SET name=$1, description=$2 WHERE id=$3`,
+      [targetName, description, id]
+    );
 
-    // Replace permissions if provided
     if (typeof permsInput !== "undefined") {
       const perms = parsePermStrings(permsInput);
       await client.query(`DELETE FROM role_permissions WHERE role_id = $1`, [id]);
@@ -264,7 +323,9 @@ const updateRole = async (req, res) => {
         if (ids.length) {
           const values = ids.map((_, i) => `($1, $${i + 2})`).join(",");
           await client.query(
-            `INSERT INTO role_permissions (role_id, permission_id) VALUES ${values} ON CONFLICT DO NOTHING`,
+            `INSERT INTO role_permissions (role_id, permission_id)
+             VALUES ${values}
+             ON CONFLICT DO NOTHING`,
             [id, ...ids]
           );
         }
@@ -292,21 +353,22 @@ const deleteRole = async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    const { rows } = await client.query(`SELECT id, name FROM roles WHERE id = $1`, [id]);
+    const { rows } = await client.query(`SELECT id, name, core FROM roles WHERE id = $1`, [id]);
     if (!rows.length) {
       await client.query("ROLLBACK");
       return res.status(404).json({ message: "Role not found." });
     }
     const role = rows[0];
 
-    // Safeguard: core roles cannot be deleted
-    if (isCoreRoleName(role.name)) {
+    if (isCoreRoleName(role.name) || role.core === true) {
       await client.query("ROLLBACK");
       return res.status(400).json({ message: "Cannot delete a core system role." });
     }
 
-    // Safeguard: block deletion when assigned to users
-    const { rowCount: inUse } = await client.query(`SELECT 1 FROM user_roles WHERE role_id = $1 LIMIT 1`, [id]);
+    const { rowCount: inUse } = await client.query(
+      `SELECT 1 FROM user_roles WHERE role_id = $1 LIMIT 1`,
+      [id]
+    );
     if (inUse) {
       await client.query("ROLLBACK");
       return res.status(400).json({ message: "Cannot delete role while it is assigned to users." });
@@ -326,7 +388,7 @@ const deleteRole = async (req, res) => {
   }
 };
 
-// GET /api/roles/:id/users  → which users have this role
+// GET /api/roles/:id/users
 const getRoleUsers = async (req, res) => {
   const { id } = req.params;
   try {
@@ -345,7 +407,7 @@ const getRoleUsers = async (req, res) => {
   }
 };
 
-// POST /api/roles/:id/users/:userId  → assign role to user
+// POST /api/roles/:id/users/:userId
 const assignRoleToUser = async (req, res) => {
   const { id, userId } = req.params;
   try {
@@ -360,7 +422,7 @@ const assignRoleToUser = async (req, res) => {
   }
 };
 
-// DELETE /api/roles/:id/users/:userId  → remove role from user
+// DELETE /api/roles/:id/users/:userId
 const removeRoleFromUser = async (req, res) => {
   const { id, userId } = req.params;
   try {
@@ -372,8 +434,7 @@ const removeRoleFromUser = async (req, res) => {
   }
 };
 
-// POST /api/roles/:id/permissions  → replace permissions set for a role
-// body: { permissions: ["results:view","results:enter",...] }
+// POST /api/roles/:id/permissions
 const setRolePermissions = async (req, res) => {
   const { id } = req.params;
   const { permissions: permsInput } = req.body || {};
@@ -397,7 +458,9 @@ const setRolePermissions = async (req, res) => {
       if (ids.length) {
         const values = ids.map((_, i) => `($1, $${i + 2})`).join(",");
         await client.query(
-          `INSERT INTO role_permissions (role_id, permission_id) VALUES ${values} ON CONFLICT DO NOTHING`,
+          `INSERT INTO role_permissions (role_id, permission_id)
+           VALUES ${values}
+           ON CONFLICT DO NOTHING`,
           [id, ...ids]
         );
       }
@@ -417,18 +480,13 @@ const setRolePermissions = async (req, res) => {
 };
 
 module.exports = {
-  // roles
   getRoles,
   createRole,
   updateRole,
   deleteRole,
-
-  // relations
   getRoleUsers,
   assignRoleToUser,
   removeRoleFromUser,
-
-  // permissions
   getPermissionsCatalog,
   setRolePermissions,
 };

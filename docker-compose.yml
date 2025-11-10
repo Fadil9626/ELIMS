@@ -5,33 +5,34 @@ networks:
     driver: bridge
 
 volumes:
-  postgres_data:
+  elims_postgres_data:
 
 services:
   # ===========================================================
-  # 🧱 PostgreSQL Database
+  # PostgreSQL Database
   # ===========================================================
   db:
     image: postgres:16-alpine
     container_name: elims_db
     restart: always
     environment:
-      # Read from the .env file
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-elims_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - elims_postgres_data:/var/lib/postgresql/data/pgdata
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 10s
     networks:
       - elims_net
 
   # ===========================================================
-  # 🚀 Node.js Backend API
+  # Node.js Backend API
   # ===========================================================
   api:
     build:
@@ -42,20 +43,24 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    command: npm run dev
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
       PORT: 5000
-      # Read from the .env file
-      JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      CORS_ORIGIN: ${CORS_ORIGIN}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-prod}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-elims_pass}@db:5432/${POSTGRES_DB:-postgres}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://localhost:8081}
     ports:
       - "5000:5000"
+    volumes:
+      # ✅ Removed ./backend:/usr/src/app (was breaking container)
+      - /usr/src/app/node_modules
+      - ./.env:/usr/src/app/.env
     networks:
       - elims_net
 
   # ===========================================================
-  # 🎨 React Frontend (Static Build + NGINX Serve)
+  # Production Frontend (Nginx)
   # ===========================================================
   web:
     build:
@@ -66,7 +71,32 @@ services:
     depends_on:
       - api
     ports:
-      # Using port 8081 to avoid conflicts
       - "8081:80"
     networks:
       - elims_net
+    profiles:
+      - prod
+
+  # ===========================================================
+  # Development Frontend (Vite Hot Reload)
+  # ===========================================================
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: elims_frontend_dev
+    restart: always
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - VITE_API_BASE=http://api:5000
+    networks:
+      - elims_net
+    profiles:
+      - dev

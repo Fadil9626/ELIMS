@@ -12,18 +12,25 @@ const {
   uploadLabLogoDark,
 } = require("../controllers/settingsController");
 
-/* Legacy */
+// ✅ NEW: MRN Controller
+const {
+  getMRNSettings,
+  updateMRNSettings,
+} = require("../controllers/mrnSettingsController");
+
+/* ==========================================================
+   SYSTEM SETTINGS (Legacy global key/value)
+   ========================================================== */
 router.get("/", protect, authorize("settings", "view"), getAllSettings);
 router.put("/", protect, authorize("settings", "edit"), updateAllSettings);
 
-/* Lab Profile */
+/* ==========================================================
+   LAB PROFILE
+   ========================================================== */
 router.get("/lab-profile", protect, authorize("settings", "view"), getLabProfile);
 router.put("/lab-profile", protect, authorize("settings", "edit"), updateLabProfile);
 
-/* Logo Uploads */
-router.options("/lab-profile/logo/light", (_req, res) => res.sendStatus(204));
-router.options("/lab-profile/logo/dark", (_req, res) => res.sendStatus(204));
-
+/* Upload Logo (Light) */
 router.post(
   "/lab-profile/logo/light",
   protect,
@@ -32,12 +39,30 @@ router.post(
   uploadLabLogoLight
 );
 
+/* Upload Logo (Dark) */
 router.post(
   "/lab-profile/logo/dark",
   protect,
   authorize("settings", "edit"),
   uploadLogo.single("file"),
   uploadLabLogoDark
+);
+
+/* ==========================================================
+   ✅ MRN CONFIGURATION
+   ========================================================== */
+router.get(
+  "/mrn",
+  protect,
+  authorize("settings", "view"),
+  getMRNSettings
+);
+
+router.put(
+  "/mrn",
+  protect,
+  authorize("settings", "edit"),
+  updateMRNSettings
 );
 
 module.exports = router;
