@@ -1,71 +1,36 @@
 import React from "react";
 import { useAuth } from "../../context/AuthContext";
 
-// ✅ Real full Admin Dashboard
-import AdminDashboardPage from "./AdminDashboardPage";
+// ✅ Import your REAL admin dashboard UI
+import AdminDashboardPage from "../dashboard/AdminDashboardPage";
 
-// ✅ Default dashboard for normal staff
-import DashboardPage from "./DashboardPage";
-
-// ✅ Optional focused dashboards (can replace later)
+// Later we will replace these placeholders:
 const PathologistDash = () => <div className="p-6">Pathologist Worklist</div>;
-const PhlebotomyDash  = () => <div className="p-6">Phlebotomy Collection Queue</div>;
-const ReceptionDash   = () => <div className="p-6">Reception - Patient Intake</div>;
-const FinanceDash     = () => <div className="p-6">Finance Dashboard</div>;
-const InventoryDash   = () => <div className="p-6">Inventory Overview</div>;
-const ClinicianDash   = () => <div className="p-6">Clinician Follow-ups</div>;
+const PhlebotomyDash = () => <div className="p-6">Phlebotomy Worklist</div>;
+const ReceptionDash = () => <div className="p-6">Reception Dashboard</div>;
+const FinanceDash = () => <div className="p-6">Finance Dashboard</div>;
+const InventoryDash = () => <div className="p-6">Inventory Dashboard</div>;
+const ClinicianDash = () => <div className="p-6">Doctor / Clinician View</div>;
 
 export default function DashboardRouter() {
   const { user } = useAuth();
   if (!user) return null;
 
-  // ✅ Extract permission list safely
-  const permissions = user.permission_slugs || [];
+  // Normalize role name
+  const role = (user.role_name || "").toLowerCase().trim();
 
-  // Debug Logs
-  console.log("🟢 USER:", user);
-  console.log("🔑 PERMISSION SLUGS:", permissions);
+  // ✅ SUPER ADMIN + ADMIN both use Admin Dashboard
+  if (role.includes("super")) return <AdminDashboardPage />;
+  if (role.includes("admin")) return <AdminDashboardPage />;
 
-  // ✅ Super Admin / Admin detected by permission authority
-  if (permissions.some(p => 
-    p.startsWith("settings") || 
-    p.startsWith("admin") ||
-    p.startsWith("billing")
-  )) {
-    return <AdminDashboardPage />;
-  }
+  if (role.includes("reception")) return <ReceptionDash />;
+  if (role.includes("phleb")) return <PhlebotomyDash />;
+  if (role.includes("path")) return <PathologistDash />;
+  if (role.includes("finance") || role.includes("account")) return <FinanceDash />;
+  if (role.includes("inventory")) return <InventoryDash />;
+  if (role.includes("doctor") || role.includes("clinician")) return <ClinicianDash />;
+  if (role.includes("scientist") || role.includes("lab tech")) return <PathologistDash />;
 
-  // ✅ Pathologist
-  if (permissions.some(p => p.includes("results:verify"))) {
-    return <PathologistDash />;
-  }
-
-  // ✅ Phlebotomist
-  if (permissions.some(p => p.startsWith("phlebotomy"))) {
-    return <PhlebotomyDash />;
-  }
-
-  // ✅ Receptionist
-  if (permissions.some(p => p.startsWith("patients:view")) &&
-      !permissions.some(p => p.startsWith("results"))) {
-    return <ReceptionDash />;
-  }
-
-  // ✅ Finance / Billing
-  if (permissions.some(p => p.startsWith("finance") || p.startsWith("billing"))) {
-    return <FinanceDash />;
-  }
-
-  // ✅ Inventory
-  if (permissions.some(p => p.startsWith("inventory"))) {
-    return <InventoryDash />;
-  }
-
-  // ✅ Clinician
-  if (permissions.some(p => p.startsWith("clinician"))) {
-    return <ClinicianDash />;
-  }
-
-  // ✅ Default fallback dashboard
-  return <DashboardPage />;
+  // Final fallback
+  return <AdminDashboardPage />;
 }

@@ -7,24 +7,20 @@ const AdminDashboardPage = () => {
   const { authedFetch, user } = useAuth();
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState("month"); // ✅ FIXED
+  const [period, setPeriod] = useState("month");
 
   const fetchStats = async () => {
     setLoading(true);
     try {
-      const res = await authedFetch(`/api/billing/dashboard?period=${period}`, {
-        method: "GET",
-      });
-
+      const res = await authedFetch(`/api/dashboard/admin?period=${period}`);
       const text = await res.text();
 
-      // ✅ Prevents “Unexpected token <” when backend returns HTML
       let data;
       try {
         data = JSON.parse(text);
       } catch {
         console.error("Invalid JSON response:", text);
-        throw new Error("Backend did not return JSON (check route)");
+        throw new Error("Backend did not return valid JSON");
       }
 
       setStats(data);
@@ -51,14 +47,8 @@ const AdminDashboardPage = () => {
     <div className="space-y-8">
       <h1 className="text-3xl font-bold">Welcome, {user?.full_name}</h1>
 
-      {/* Time Filter Buttons */}
       <div className="flex gap-3">
-        {[
-          { key: "day", label: "Today" },
-          { key: "week", label: "This Week" },
-          { key: "month", label: "This Month" },
-          { key: "year", label: "This Year" },
-        ].map(({ key, label }) => (
+        {["day", "week", "month", "year"].map((key) => (
           <button
             key={key}
             onClick={() => setPeriod(key)}
@@ -68,34 +58,20 @@ const AdminDashboardPage = () => {
                 : "bg-white text-gray-600 border-gray-300 hover:bg-gray-100"
             }`}
           >
-            {label}
+            {key.toUpperCase()}
           </button>
         ))}
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
         <StatCard icon={<FiDollarSign />} label="Total Revenue" value={`Le ${Number(stats.totalRevenue).toLocaleString()}`} />
         <StatCard icon={<FiClipboard />} label="Completed Tests" value={stats.completedTests} />
         <StatCard icon={<MdPendingActions />} label="Pending Tests" value={stats.pendingTests} />
         <StatCard icon={<FiUsers />} label="New Patients" value={stats.newPatientCount} />
         <StatCard icon={<MdPeopleAlt />} label="Active Users" value={stats.activeUsers} />
-        <StatCard icon={<FiTrendingUp />} label="Invoice Count" value={stats.invoiceCount} />
+        <StatCard icon={<FiTrendingUp />} label="Invoices" value={stats.invoiceCount} />
         <StatCard icon={<FiDollarSign />} label="Pending Payments" value={stats.pendingPayments} />
         <StatCard icon={<MdPeopleAlt />} label="Total Staff" value={stats.totalStaff} />
-      </div>
-
-      {/* Charts Placeholder */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-lg shadow border">
-          <h2 className="text-lg font-semibold mb-3">Revenue (Current Year)</h2>
-          <p className="text-gray-400 text-sm">Chart coming next…</p>
-        </div>
-
-        <div className="bg-white p-6 rounded-lg shadow border">
-          <h2 className="text-lg font-semibold mb-3">Patient Registrations (Current Year)</h2>
-          <p className="text-gray-400 text-sm">Chart coming next…</p>
-        </div>
       </div>
     </div>
   );

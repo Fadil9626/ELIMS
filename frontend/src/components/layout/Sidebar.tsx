@@ -96,7 +96,13 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
         <nav className="flex-grow overflow-y-auto p-3 space-y-1 custom-scrollbar">
           <ul className="space-y-1">
 
-            <SidebarLink to="/" icon={HiOutlineViewGrid} isExpanded={isExpanded} onClick={handleNavClick}>
+            {/* ✅ FIXED: Dashboard now goes to real Admin Dashboard */}
+            <SidebarLink
+              to="/admin/dashboard"
+              icon={HiOutlineViewGrid}
+              isExpanded={isExpanded}
+              onClick={handleNavClick}
+            >
               Dashboard
             </SidebarLink>
 
@@ -147,7 +153,7 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
                   {isExpanded && (pathologyOpen ? <HiChevronDown /> : <HiChevronRight />)}
                 </button>
 
-                {pathologyOpen && isExpanded && (
+                {pathologyOpen && (
                   <ul className="ml-8 mt-1 space-y-1">
                     <SidebarLink to="/pathologist/worklist" icon={HiOutlineClipboardList} isExpanded onClick={handleNavClick}>
                       Worklist
@@ -174,14 +180,14 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
               </SidebarLink>
             )}
 
-            {/* Staff Management */}
-            {can("staff", "view") && (
+            {/* Staff */}
+            {can("admin", "users_manage") && (
               <SidebarLink to="/admin/staff" icon={HiOutlineBriefcase} isExpanded={isExpanded} onClick={handleNavClick}>
                 Staff Management
               </SidebarLink>
             )}
 
-            {/* Admin Settings */}
+            {/* System Settings */}
             {can("settings", "view") && (
               <li>
                 <button
@@ -193,7 +199,7 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
                   {isExpanded && (systemOpen ? <HiChevronDown /> : <HiChevronRight />)}
                 </button>
 
-                {systemOpen && isExpanded && (
+                {systemOpen && (
                   <ul className="ml-8 mt-1 space-y-1">
                     <SidebarLink to="/admin/settings" icon={HiOutlineCog} isExpanded onClick={handleNavClick}>
                       General Settings
