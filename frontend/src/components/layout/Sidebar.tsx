@@ -26,12 +26,12 @@ const SidebarLink = ({ to, icon: Icon, children, isExpanded, onClick }) => (
       to={to}
       className={({ isActive }) =>
         `flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 
-        ${isExpanded ? "justify-start" : "justify-center"} 
-        ${
-          isActive
-            ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-sm"
-            : "text-gray-300 hover:bg-gray-700 hover:text-white"
-        }`
+         ${isExpanded ? "justify-start" : "justify-center"} 
+         ${
+           isActive
+             ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-sm"
+             : "text-gray-300 hover:bg-gray-700 hover:text-white"
+         }`
       }
     >
       <Icon className="w-5 h-5 shrink-0" />
@@ -41,7 +41,7 @@ const SidebarLink = ({ to, icon: Icon, children, isExpanded, onClick }) => (
 );
 
 const Sidebar = ({ isExpanded, toggleSidebar }) => {
-  const { user, logout, can } = useAuth();
+  const { user, logout, can } = useAuth(); // 'can' comes from your AuthContext
 
   const [patientOpen, setPatientOpen] = useState(false);
   const [pathologyOpen, setPathologyOpen] = useState(false);
@@ -74,8 +74,8 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
 
       <aside
         className={`fixed inset-y-0 left-0 flex flex-col bg-gray-900 text-gray-100 shadow-2xl ${sidebarWidth}
-        transition-all duration-300 ease-in-out z-40
-        ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
+         transition-all duration-300 ease-in-out z-40
+         ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
       >
         {/* Header */}
         <div
@@ -95,8 +95,7 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
         {/* Navigation */}
         <nav className="flex-grow overflow-y-auto p-3 space-y-1 custom-scrollbar">
           <ul className="space-y-1">
-
-            {/* ✅ FIXED: Dashboard now goes to real Admin Dashboard */}
+            
             <SidebarLink
               to="/admin/dashboard"
               icon={HiOutlineViewGrid}
@@ -106,8 +105,9 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
               Dashboard
             </SidebarLink>
 
-            {/* Patients */}
-            {can("patients", "view") && (
+
+            {/* ✅ **FIX**: Using capitalized resource name "Patients" */}
+            {can("Patients", "View") && (
               <li>
                 <button
                   onClick={() => setPatientOpen((p) => !p)}
@@ -124,7 +124,8 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
                       Patient List
                     </SidebarLink>
 
-                    {can("tests", "view") && (
+                    {/* ✅ **FIX**: Using capitalized resource name "Tests" */}
+                    {can("Tests", "View") && (
                       <SidebarLink to="/tests/management" icon={HiOutlineBeaker} isExpanded onClick={handleNavClick}>
                         Test Management
                       </SidebarLink>
@@ -134,15 +135,15 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
               </li>
             )}
 
-            {/* Phlebotomy */}
-            {can("phlebotomy", "view") && (
+            {/* ✅ **FIX**: Using capitalized resource name "Phlebotomy" */}
+            {can("Phlebotomy", "View") && (
               <SidebarLink to="/phlebotomy/worklist" icon={HiOutlineClipboardCheck} isExpanded={isExpanded} onClick={handleNavClick}>
                 Phlebotomy Worklist
               </SidebarLink>
             )}
 
-            {/* Pathology */}
-            {(can("results", "verify") || can("results", "enter")) && (
+            {/* ✅ **FIX**: Using capitalized resource names */}
+            {(can("Results", "Verify") || can("Results", "Enter")) && (
               <li>
                 <button
                   onClick={() => setPathologyOpen((p) => !p)}
@@ -166,29 +167,29 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
               </li>
             )}
 
-            {/* Reports */}
-            {can("reports", "view") && (
+            {/* ✅ **FIX**: Using capitalized resource name "Reports" */}
+            {can("Reports", "View") && (
               <SidebarLink to="/reports" icon={HiOutlineDocumentReport} isExpanded={isExpanded} onClick={handleNavClick}>
                 Reports
               </SidebarLink>
             )}
 
-            {/* Inventory */}
-            {can("inventory", "view") && (
+            {/* ✅ **FIX**: Using capitalized resource name "Inventory" */}
+            {can("Inventory", "View") && (
               <SidebarLink to="/inventory" icon={HiOutlineArchive} isExpanded={isExpanded} onClick={handleNavClick}>
                 Inventory
               </SidebarLink>
             )}
 
-            {/* Staff */}
-            {can("admin", "users_manage") && (
+            {/* ✅ **FIX**: Using capitalized resource name "Users" */}
+            {can("Users", "View") && ( 
               <SidebarLink to="/admin/staff" icon={HiOutlineBriefcase} isExpanded={isExpanded} onClick={handleNavClick}>
                 Staff Management
               </SidebarLink>
             )}
 
-            {/* System Settings */}
-            {can("settings", "view") && (
+            {/* ✅ **FIX**: Using capitalized resource name "Settings" */}
+            {can("Settings", "View") && (
               <li>
                 <button
                   onClick={() => setSystemOpen((p) => !p)}
@@ -204,7 +205,6 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
                     <SidebarLink to="/admin/settings" icon={HiOutlineCog} isExpanded onClick={handleNavClick}>
                       General Settings
                     </SidebarLink>
-
                     <li>
                       <button
                         onClick={() => setLabOpen((p) => !p)}

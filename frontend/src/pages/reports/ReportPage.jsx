@@ -173,7 +173,8 @@ const TestReportPage = () => {
 
       <div className="p-6 bg-gray-100 font-sans">
         {/* Top controls */}
-        <div className className="flex justify-end items-center mb-6 no-print">
+        {/* ✅ **FIX**: Removed duplicate 'className' attribute */}
+        <div className="flex justify-end items-center mb-6 no-print">
           <button
             onClick={() => navigate(-1)}
             className="flex items-center gap-2 bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600 transition mr-4"
@@ -198,9 +199,10 @@ const TestReportPage = () => {
           {/* Header */}
           <header className="flex items-center justify-between p-4 border-b-2 border-gray-800 mb-4">
             
+            {/* ✅ PERFORMANCE: Removed cache-busting query string */}
             {settings.lab_logo_light ? (
               <img
-                src={`${API_BASE_URL}${settings.lab_logo_light}?t=${Date.now()}`}
+                src={`${API_BASE_URL}${settings.lab_logo_light}`}
                 alt="Primary Logo"
                 className="h-20 max-w-[180px] object-contain"
               />
@@ -221,9 +223,10 @@ const TestReportPage = () => {
               </p>
             </div>
 
+            {/* ✅ PERFORMANCE: Removed cache-busting query string */}
             {settings.lab_logo_dark ? (
               <img
-                src={`${API_BASE_URL}${settings.lab_logo_dark}?t=${Date.now()}`}
+                src={`${API_BASE_URL}${settings.lab_logo_dark}`}
                 alt="Secondary Logo"
                 className="h-20 max-w-[180px] object-contain"
               />
@@ -319,7 +322,7 @@ const TestReportPage = () => {
                           {/* Test/Panel Row */}
                           <tr className="bg-gray-50 font-semibold border-b border-gray-300">
                             <td colSpan={5} className="px-4 py-2"> {/* Colspan is 5 now */}
-                                {item.test_name} 
+                              {item.test_name} 
                             </td>
                           </tr>
 
@@ -379,14 +382,14 @@ const TestReportPage = () => {
             
             {/* Clinical Notes Section (If data exists) */}
             {clinicalNote && (
-                <div className="mb-6">
-                    <h4 className="font-bold text-sm text-gray-800 mb-1 underline">
-                        Clinical Notes / Interpretation
-                    </h4>
-                    <p className="text-sm text-gray-700 whitespace-pre-wrap">
-                        {clinicalNote}
-                    </p>
-                </div>
+              <div className="mb-6">
+                <h4 className="font-bold text-sm text-gray-800 mb-1 underline">
+                  Clinical Notes / Interpretation
+                </h4>
+                <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                  {clinicalNote}
+                </p>
+              </div>
             )}
 
             {/* Signature Grid */}
@@ -404,7 +407,7 @@ const TestReportPage = () => {
               <div className="flex flex-col items-center">
                  {/* Display Reviewed By Name if available from the backend */}
                 <p className="h-16 flex items-end font-semibold text-gray-800">
-                    {reportData.last_reviewed_by || ''}
+                  {reportData.last_reviewed_by || ''}
                 </p>
                 <p className="signature-line w-full pt-1 text-center">
                   Reviewed By
@@ -414,9 +417,10 @@ const TestReportPage = () => {
               {/* Pathologist / Approving Officer */}
               <div className="flex flex-col items-center">
                 {/* Professional signature if available & allowed */}
+                {/* ✅ PERFORMANCE: Removed cache-busting query string */}
                 {pro?.show_on_reports && pro?.signature_image_url ? (
                   <img
-                    src={`${API_BASE_URL}${pro.signature_image_url}?t=${Date.now()}`}
+                    src={`${API_BASE_URL}${pro.signature_image_url}`}
                     alt="Signature"
                     className="h-16 object-contain"
                   />

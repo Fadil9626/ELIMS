@@ -1,7 +1,3 @@
-// ============================================================
-// USER CONTROLLER (RBAC + Multi-Role Support)
-// ============================================================
-
 const bcrypt = require("bcryptjs");
 const pool = require("../config/database");
 const { logAuditEvent } = require("../utils/auditLogger");
@@ -11,6 +7,7 @@ const { logAuditEvent } = require("../utils/auditLogger");
 // ----------------------------------------
 async function assignRoles(userId, roleIds = []) {
   await pool.query(`DELETE FROM user_roles WHERE user_id = $1`, [userId]);
+
   if (Array.isArray(roleIds) && roleIds.length > 0) {
     const values = roleIds.map((r) => `(${userId}, ${r})`).join(",");
     await pool.query(`INSERT INTO user_roles (user_id, role_id) VALUES ${values}`);
@@ -18,30 +15,46 @@ async function assignRoles(userId, roleIds = []) {
 }
 
 // ----------------------------------------
-// GET /api/users/profile   (self)
+// GET /api/users/profile  (self)
 // ----------------------------------------
 const getUserProfile = async (req, res) => {
   res.json(req.user);
 };
 
 // ----------------------------------------
-// GET /api/users           (list all)
+// GET /api/users  (list all users)
+// CLEAN SQL — ALL FIXED
 // ----------------------------------------
 const getAllUsers = async (req, res) => {
-  const { rows } = await pool.query(`
-    SELECT 
-      u.id, 
-      u.full_name, 
-      u.email, 
+  const sql = `
+    SELECT
+      u.id,
+      u.full_name,
+      u.email,
       u.is_active,
-      u.department,
-      ARRAY_REMOVE(ARRAY_AGG(r.name), NULL) AS roles
+      d.id AS department_id,
+      d.name AS department_name,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'id', r.id,
+            'name', r.name,
+            'core', r.core
+          )
+        ) FILTER (WHERE r.id IS NOT NULL),
+        '[]'
+      ) AS roles
     FROM users u
     LEFT JOIN user_roles ur ON ur.user_id = u.id
     LEFT JOIN roles r ON r.id = ur.role_id
-    GROUP BY u.id
-    ORDER BY u.full_name ASC
-  `);
+    LEFT JOIN departments d ON d.id = u.department_id
+    GROUP BY
+      u.id, u.full_name, u.email, u.is_active,
+      d.id, d.name
+    ORDER BY u.full_name ASC;
+  `;
+
+  const { rows } = await pool.query(sql);
   res.json(rows);
 };
 
@@ -49,12 +62,19 @@ const getAllUsers = async (req, res) => {
 // GET /api/users/active
 // ----------------------------------------
 const getActiveUsers = async (req, res) => {
-  const { rows } = await pool.query(`
-    SELECT id, full_name, email, department
-    FROM users
-    WHERE is_active = TRUE
-    ORDER BY full_name ASC
-  `);
+  const sql = `
+    SELECT
+      u.id,
+      u.full_name,
+      u.email,
+      d.name AS department_name
+    FROM users u
+    LEFT JOIN departments d ON d.id = u.department_id
+    WHERE u.is_active = TRUE
+    ORDER BY u.full_name ASC;
+  `;
+
+  const { rows } = await pool.query(sql);
   res.json(rows);
 };
 
@@ -62,21 +82,26 @@ const getActiveUsers = async (req, res) => {
 // GET /api/users/doctors
 // ----------------------------------------
 const getDoctors = async (req, res) => {
-  const { rows } = await pool.query(`
-    SELECT u.id, u.full_name, u.email
+  const sql = `
+    SELECT
+      u.id,
+      u.full_name,
+      u.email
     FROM users u
     JOIN user_roles ur ON ur.user_id = u.id
     WHERE ur.role_id = (SELECT id FROM roles WHERE LOWER(name) = 'doctor' LIMIT 1)
-    ORDER BY u.full_name ASC
-  `);
+    ORDER BY u.full_name ASC;
+  `;
+
+  const { rows } = await pool.query(sql);
   res.json(rows);
 };
 
 // ----------------------------------------
-// POST /api/users   (Create User + Assign Roles)
+// POST /api/users (Create User + Assign Roles)
 // ----------------------------------------
 const createUser = async (req, res) => {
-  const { full_name, email, password, department, role_ids } = req.body;
+  const { full_name, email, password, department_id, role_ids } = req.body;
 
   if (!full_name || !email || !password) {
     return res.status(400).json({ message: "Name, email, and password are required." });
@@ -90,13 +115,16 @@ const createUser = async (req, res) => {
   const password_hash = await bcrypt.hash(password, 12);
 
   const result = await pool.query(
-    `INSERT INTO users (full_name, email, password_hash, department, is_active, created_at)
-     VALUES ($1, $2, $3, $4, TRUE, NOW())
-     RETURNING id`,
-    [full_name, email, password_hash, department || null]
+    `
+      INSERT INTO users (full_name, email, password_hash, department_id, is_active, created_at)
+      VALUES ($1, $2, $3, $4, TRUE, NOW())
+      RETURNING id
+    `,
+    [full_name, email, password_hash, department_id || null]
   );
 
   const userId = result.rows[0].id;
+
   await assignRoles(userId, role_ids);
 
   await logAuditEvent({
@@ -110,15 +138,19 @@ const createUser = async (req, res) => {
 };
 
 // ----------------------------------------
-// PUT /api/users/:id   (Update User + Roles)
+// PUT /api/users/:id  (Update User + Roles)
 // ----------------------------------------
 const updateUser = async (req, res) => {
-  const { full_name, email, department, role_ids } = req.body;
+  const { full_name, email, department_id, role_ids } = req.body;
   const userId = req.params.id;
 
   await pool.query(
-    `UPDATE users SET full_name = $1, email = $2, department = $3 WHERE id = $4`,
-    [full_name, email, department || null, userId]
+    `
+      UPDATE users
+      SET full_name = $1, email = $2, department_id = $3
+      WHERE id = $4
+    `,
+    [full_name, email, department_id || null, userId]
   );
 
   await assignRoles(userId, role_ids);
@@ -157,10 +189,16 @@ const deleteUser = async (req, res) => {
 // ----------------------------------------
 const updateUserProfile = async (req, res) => {
   const { full_name, department } = req.body;
+
   await pool.query(
-    `UPDATE users SET full_name = $1, department = $2 WHERE id = $3`,
+    `
+      UPDATE users
+      SET full_name = $1, department = $2
+      WHERE id = $3
+    `,
     [full_name, department, req.user.id]
   );
+
   res.json({ message: "Profile updated." });
 };
 
@@ -169,16 +207,25 @@ const updateUserProfile = async (req, res) => {
 // ----------------------------------------
 const changePassword = async (req, res) => {
   const { old_password, new_password } = req.body;
-  const user = await pool.query(`SELECT password_hash FROM users WHERE id = $1`, [req.user.id]);
 
-  if (!(await bcrypt.compare(old_password, user.rows[0].password_hash))) {
+  const result = await pool.query(`SELECT password_hash FROM users WHERE id = $1`, [
+    req.user.id,
+  ]);
+
+  const user = result.rows[0];
+
+  if (!(await bcrypt.compare(old_password, user.password_hash))) {
     return res.status(400).json({ message: "Old password incorrect." });
   }
 
-  await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [
-    await bcrypt.hash(new_password, 12),
-    req.user.id,
-  ]);
+  await pool.query(
+    `
+      UPDATE users
+      SET password_hash = $1
+      WHERE id = $2
+    `,
+    [await bcrypt.hash(new_password, 12), req.user.id]
+  );
 
   res.json({ message: "Password updated." });
 };
@@ -188,10 +235,16 @@ const changePassword = async (req, res) => {
 // ----------------------------------------
 const adminSetPassword = async (req, res) => {
   const { new_password } = req.body;
-  await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [
-    await bcrypt.hash(new_password, 12),
-    req.params.id,
-  ]);
+
+  await pool.query(
+    `
+      UPDATE users
+      SET password_hash = $1
+      WHERE id = $2
+    `,
+    [await bcrypt.hash(new_password, 12), req.params.id]
+  );
+
   res.json({ message: "Password reset successfully." });
 };
 
@@ -200,10 +253,16 @@ const adminSetPassword = async (req, res) => {
 // ----------------------------------------
 const uploadProfilePicture = async (req, res) => {
   const url = `/uploads/avatars/${req.file.filename}`;
-  await pool.query(`UPDATE users SET profile_image_url = $1 WHERE id = $2`, [
-    url,
-    req.user.id,
-  ]);
+
+  await pool.query(
+    `
+      UPDATE users
+      SET profile_image_url = $1
+      WHERE id = $2
+    `,
+    [url, req.user.id]
+  );
+
   res.json({ message: "Profile picture updated.", url });
 };
 

@@ -1,5 +1,6 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
+const { protect, authorize } = require("../middleware/authMiddleware");
 
 const {
   registerPatient,
@@ -9,98 +10,35 @@ const {
   deletePatient,
   getPatientTestHistory,
   getPatientByMRN,
-} = require('../controllers/patientController');
+  searchPatients,
+} = require("../controllers/patientController");
 
-const { protect, authorize } = require('../middleware/authMiddleware');
+// ============================================================
+// 🧱  PATIENT ROUTES (RBAC enforced)
+// ============================================================
 
-/**
- * ==========================================================
- * SPECIAL ROUTES MUST COME FIRST
- * ==========================================================
- */
+// 🔍 Search patients (requires Patients→View)
+router.get("/search", protect, authorize("Patients", "View"), searchPatients);
 
-/** Patient Search by MRN / Barcode */
-router.get(
-  '/mrn/:mrn',
-  protect,
-  authorize('patients', 'view'),
-  getPatientByMRN
-);
+// 📋 Get all patients (requires Patients→View)
+router.get("/", protect, authorize("Patients", "View"), getAllPatients);
 
-/** NEW REQUEST MODE — Prevents numeric route from capturing */
-router.get(
-  '/new-request',
-  protect,
-  authorize('patients', 'view'),
-  (req, res) => {
-    return res.json({ mode: "new-request" });
-  }
-);
+// 🆕 Register new patient (requires Patients→Create)
+router.post("/", protect, authorize("Patients", "Create"), registerPatient);
 
-/**
- * ==========================================================
- * PATIENT LIST + CREATE
- * ==========================================================
- */
-router
-  .route('/')
-  .get(protect, authorize('patients', 'view'), getAllPatients)
-  .post(protect, authorize('patients', 'create'), registerPatient);
+// 🆔 Lookup by MRN (requires Patients→View)
+router.get("/mrn/:mrn", protect, authorize("Patients", "View"), getPatientByMRN);
 
-/**
- * ==========================================================
- * PATIENT HISTORY (needs to come before numeric :id validation)
- * ==========================================================
- */
-router.get(
-  '/:id/test-requests',
-  protect,
-  authorize('patients', 'view'),
-  getPatientTestHistory
-);
+// 🧪 Patient test history (requires Patients→View)
+router.get("/:id(\\d+)/history", protect, authorize("Patients", "View"), getPatientTestHistory);
 
-/**
- * ==========================================================
- * STRICT NUMERIC PATIENT ID ROUTE
- * ==========================================================
- */
-router.get(
-  '/:id',
-  protect,
-  authorize('patients', 'view'),
-  (req, res, next) => {
-    if (!/^\d+$/.test(req.params.id)) {
-      return res.status(400).json({ message: "Invalid patient ID" });
-    }
-    next();
-  },
-  getPatientById
-);
+// 🔍 Single patient details (requires Patients→View)
+router.get("/:id(\\d+)", protect, authorize("Patients", "View"), getPatientById);
 
-router.put(
-  '/:id',
-  protect,
-  authorize('patients', 'edit'),
-  (req, res, next) => {
-    if (!/^\d+$/.test(req.params.id)) {
-      return res.status(400).json({ message: "Invalid patient ID" });
-    }
-    next();
-  },
-  updatePatient
-);
+// ✏️ Update patient (requires Patients→Update)
+router.put("/:id(\\d+)", protect, authorize("Patients", "Update"), updatePatient);
 
-router.delete(
-  '/:id',
-  protect,
-  authorize('patients', 'delete'),
-  (req, res, next) => {
-    if (!/^\d+$/.test(req.params.id)) {
-      return res.status(400).json({ message: "Invalid patient ID" });
-    }
-    next();
-  },
-  deletePatient
-);
+// 🗑️ Delete patient (requires Patients→Delete)
+router.delete("/:id(\\d+)", protect, authorize("Patients", "Delete"), deletePatient);
 
 module.exports = router;

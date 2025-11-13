@@ -1,397 +1,288 @@
-import React, { 
-  useState, 
-  useEffect, 
-  useMemo, // 💡 FIX: Ensure useMemo is imported
-  useCallback, 
-  useRef, 
-  useContext 
-} from "react";
-import phlebotomyService from "../../services/phlebotomyService";
-import ConfirmModal from "../../components/layout/ConfirmModal";
-import toast from "react-hot-toast";
-import {
-  HiOutlineClock,
-  HiOutlineBeaker,
-  HiOutlineBadgeCheck,
-  HiOutlineCheckCircle,
-  HiOutlineXCircle,
-  HiOutlineArchive,
-  HiOutlineSearch,
-  HiOutlinePrinter,
-  HiOutlineRefresh,
-  HiOutlineExclamation,
-} from "react-icons/hi";
-import { useAuth } from "../../context/AuthContext"; 
+// src/pages/phlebotomy/PhlebotomyWorklistPage.jsx
+import React, { useState, useEffect, useCallback } from "react";
+import { Link } from "react-router-dom";
+// Using Lucide icons for consistency
+import { 
+    Clock, Droplet, Hospital, CheckCircle, ArrowRight, XCircle, 
+    RefreshCcw 
+} from "lucide-react"; 
+import { toast } from "react-hot-toast";
+import phlebotomyService from "../../services/phlebotomyService"; 
 
-// ============================================================
-// STATUS CONFIGURATION
-// ============================================================
-const STATUS_CONFIG = {
-  Pending: { color: "yellow", icon: HiOutlineClock, label: "Pending", key: "pending" },
-  SampleCollected: { color: "blue", icon: HiOutlineBeaker, label: "Collected", key: "samplecollected" },
-  InProgress: { color: "purple", icon: HiOutlineBadgeCheck, label: "In Progress", key: "inprogress" },
-};
-
-// ============================================================
-// HELPER COMPONENTS
-// ============================================================
-
-// Summary Card Component
-const StatusCard = ({ label, count, color, icon: Icon, onClick, isActive }) => (
-  <button
-    onClick={onClick}
-    className={`p-4 rounded-lg shadow-md w-full text-left transition-all duration-200 border-b-4 ${
-      isActive
-        ? `bg-blue-600 text-white border-blue-800 shadow-xl`
-        : `bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border-slate-200 dark:border-slate-600`
-    }`}
-  >
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-3">
-        <Icon className={`h-6 w-6 ${isActive ? 'text-white' : `text-${color}-600`}`} />
-        <span className="text-lg font-medium">
-          {label}
-        </span>
-      </div>
-      <span className={`text-2xl font-bold ${isActive ? 'text-white' : 'text-slate-800 dark:text-white'}`}>
-        {count}
-      </span>
-    </div>
-  </button>
-);
-
-// ============================================================
-// MAIN WORKLIST PAGE
-// ============================================================
-const PhlebotomyWorklistPage = () => {
-  const [filters, setFilters] = useState({
-    status: "Pending",
-    dateRange: "today",
-    search: "",
-  });
-  const [summary, setSummary] = useState({});
-  const [requests, setRequests] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedRequest, setSelectedRequest] = useState(null);
-
-  const { token } = useAuth();
-
-  // --- Data Fetching ---
-
-  const fetchData = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const [summaryData, requestsData] = await Promise.all([
-        phlebotomyService.getSummary(token),
-        phlebotomyService.getWorklist(token, filters),
-      ]);
-      setSummary(summaryData);
-      setRequests(requestsData);
-    } catch (err) {
-      console.error("Failed to fetch data:", err);
-      setError(err.message);
-      toast.error("Failed to load worklist data.");
-    } finally {
-      setLoading(false);
-    }
-  }, [token, filters.status, filters.dateRange, filters.search]); // Depend on filters
-
-  // Fetch data on initial load and when filters change
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  // --- Filter and Action Handlers ---
-
-  const handleFilterChange = (e) => {
-    setFilters((prev) => ({
-      ...prev,
-      [e.target.name]: e.target.value,
-    }));
-  };
-
-  const handleSearch = () => {
-    fetchData(); // Manually trigger a refetch with the current search query
-  };
-
-  const printLabel = (request) => {
-    if (!request) return;
-    const zpl = `^XA
-^FO50,50^FD${request.lab_id}^FS
-^FO50,100^A0N,30,30^FD${request.first_name} ${request.last_name}^FS
-^FO50,140^BY2^B3N,N,80,Y,N^FD${request.lab_id}^FS
-^XZ`;
-    const printWindow = window.open("", "_blank");
-    printWindow.document.write(`<pre>${zpl}</pre>`);
-    printWindow.document.close();
-    printWindow.print();
-  };
-
-  const openConfirmModal = (request) => {
-    setSelectedRequest(request);
-    setIsModalOpen(true);
-  };
-
-  const handleCollect = async (id, andPrint = false) => {
-    if (!id) return;
-    
-    try {
-      await phlebotomyService.markSampleAsCollected(id, token);
-      toast.success("Sample collected successfully!");
-      
-      if (andPrint) {
-        printLabel(selectedRequest);
-      }
-      
-      fetchData(); // Refresh all data to update counts and list
-    } catch (err) {
-      toast.error("Failed to collect sample.");
-    }
-  };
-
-  // Sort requests to show "STAT" at the top
-  const sortedRequests = useMemo(() => {
-    return [...requests].sort((a, b) => {
-      if (a.priority === "STAT" && b.priority !== "STAT") return -1;
-      if (a.priority !== "STAT" && b.priority === "STAT") return 1;
-      return 0;
+export default function PhlebotomyWorklistPage() {
+    // --- STATE ---
+    const [worklist, setWorklist] = useState([]);
+    const [summary, setSummary] = useState({ 
+        pending: 0, 
+        collected: 0, 
+        collectionsToday: 0
     });
-  }, [requests]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [statusFilter, setStatusFilter] = useState("Pending"); 
 
+    // ✅ **NEW**: State for the confirmation modal
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [selectedRequest, setSelectedRequest] = useState(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
-  return (
-    <div className="p-4 md:p-6 bg-slate-50 dark:bg-slate-900 min-h-screen">
-      
-      {/* Header */}
-      <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900 dark:text-white">
-            Phlebotomy Worklist
-          </h1>
-          <p className="text-slate-600 dark:text-slate-400 mt-1">
-            Dashboard for sample collection.
-          </p>
+    const token = JSON.parse(localStorage.getItem("userInfo"))?.token;
+
+    // --- DATA FETCHING (Memoized & Parallel) ---
+    const fetchWorklist = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        if (!token) {
+            setError("Authentication required.");
+            setLoading(false);
+            return;
+        }
+        
+        try {
+            const [summaryData, worklistData] = await Promise.all([
+                phlebotomyService.getSummary(token),
+                phlebotomyService.getWorklist({ status: statusFilter }, token)
+            ]);
+            
+            setSummary({
+                pending: summaryData.pending || 0,
+                collected: summaryData.collected || 0,
+                collectionsToday: summaryData.collectionsToday || 0 
+            }); 
+
+            setWorklist(worklistData || []);
+        } catch (err) {
+            console.error("❌ Phlebotomy Fetch Error:", err);
+            const errorMsg = "Failed to load worklist. Check server connection or required 'phlebotomy:view' permissions.";
+            setError(errorMsg);
+        } finally {
+            setLoading(false);
+        }
+    }, [statusFilter, token]);
+
+    useEffect(() => {
+        fetchWorklist();
+    }, [fetchWorklist]);
+
+    // --- HANDLERS ---
+
+    // ✅ **NEW**: Step 1 - Open the modal and store the item
+    const openCollectionModal = (requestItem) => {
+        setSelectedRequest(requestItem);
+        setIsModalOpen(true);
+    };
+
+    // ✅ **NEW**: Close the modal
+    const closeCollectionModal = () => {
+        setIsModalOpen(false);
+        setSelectedRequest(null);
+    };
+
+    // ✅ **NEW**: Step 2 - Run the API call from the modal
+    const handleConfirmCollection = async () => {
+        if (!selectedRequest) return;
+        
+        setIsSubmitting(true);
+        try {
+            const response = await phlebotomyService.markSampleAsCollected(selectedRequest.id, token);
+            toast.success(response.message || "✅ Sample collected!");
+            
+            fetchWorklist(); // Refresh the main list
+            closeCollectionModal(); // Close the popup
+        } catch (err) {
+            console.error("Collection error:", err);
+            const errorMsg = err.message || `Failed to mark sample collection for Request #${selectedRequest.id}.`;
+            toast.error(errorMsg);
+            setError(errorMsg); 
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+    
+    // --- RENDER HELPERS ---
+    const StatusBadge = ({ status }) => {
+        let color = "bg-gray-100 text-gray-700";
+        if (status === "Pending") color = "bg-yellow-100 text-yellow-700";
+        if (status === "SampleCollected") color = "bg-blue-100 text-blue-700";
+        if (status === "Verified" || status === "Completed") color = "bg-green-100 text-green-700";
+        return (
+            <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${color}`}>
+                {status}
+            </span>
+        );
+    };
+
+    const KpiCard = ({ icon: Icon, value, label, colorClass, borderColorClass }) => (
+        <div className={`p-4 bg-white rounded-xl shadow-md border-l-4 ${borderColorClass}`}>
+            <div className={`flex items-center gap-3`}>
+                <Icon size={20} className={colorClass} />
+                <p className="text-xl font-bold text-gray-800">{value}</p>
+            </div>
+            <p className="text-sm text-gray-500 mt-1">{label}</p>
         </div>
-        <button
-          onClick={fetchData}
-          disabled={loading}
-          className="flex items-center gap-2 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg shadow-sm border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-600 disabled:opacity-50"
-        >
-          <HiOutlineRefresh className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
-          Refresh Worklist
-        </button>
-      </header>
+    );
+    
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        {Object.keys(STATUS_CONFIG).map((key) => {
-          const config = STATUS_CONFIG[key];
-          const count = summary[config.key] || 0;
-          return (
-            <StatusCard
-              key={key}
-              label={config.label}
-              icon={config.icon}
-              count={count}
-              color={config.color}
-              isActive={filters.status === key}
-              onClick={() => setFilters(prev => ({...prev, status: key}))}
-            />
-          );
-        })}
-      </div>
+    return (
+        <div className="p-6 md:p-8 bg-gray-50 min-h-screen space-y-8">
+            <h1 className="text-3xl font-extrabold text-gray-900 border-b pb-3 flex items-center gap-2">
+                <Droplet size={30} className="text-red-500" /> Phlebotomy Worklist
+            </h1>
 
-      {/* Filter and Search Bar */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow-md p-4 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-          <div className="relative md:col-span-2">
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Search Requests</label>
-            <div className="relative">
-                <HiOutlineSearch className="absolute left-3 top-3.5 text-slate-400" />
-                <input
-                  type="text"
-                  name="search"
-                  placeholder="Lab ID or Patient Name..."
-                  value={filters.search}
-                  onChange={handleFilterChange}
-                  className="w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
+            {error && (
+                <div className="p-3 bg-red-100 text-red-700 rounded-lg border border-red-300 font-medium">
+                    <XCircle size={18} className="inline mr-2" /> Error: {error}
+                </div>
+            )}
+
+            {/* KPI Cards (3-col grid, STAT removed) */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <KpiCard 
+                    icon={Clock} 
+                    value={summary.pending} 
+                    label="Awaiting Collection" 
+                    colorClass="text-yellow-600" 
+                    borderColorClass="border-l-yellow-500" 
+                />
+                <KpiCard 
+                    icon={Droplet} 
+                    value={summary.collected} 
+                    label="Total Collected" 
+                    colorClass="text-blue-600" 
+                    borderColorClass="border-l-blue-500" 
+                />
+                <KpiCard 
+                    icon={CheckCircle} 
+                    value={summary.collectionsToday} 
+                    label="Collected Today" 
+                    colorClass="text-green-600" 
+                    borderColorClass="border-l-green-500" 
                 />
             </div>
-          </div>
-          <div className="md:col-span-1">
-             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Time Period</label>
-             <select
-                name="dateRange"
-                value={filters.dateRange}
-                onChange={handleFilterChange}
-                className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
-              >
-                <option value="today">Today</option>
-                <option value="week">This Week</option>
-                <option value="month">This Month</option>
-                <option value="all">All Time</option>
-              </select>
-          </div>
-          <button
-            onClick={handleSearch}
-            className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-3 rounded-lg shadow-md hover:bg-blue-700 font-medium"
-          >
-            <HiOutlineSearch className="h-5 w-5" />
-            Apply Filters
-          </button>
-        </div>
-      </div>
 
-      {/* Worklist Table */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-slate-50 dark:bg-slate-700">
-              <tr>
-                <th className="p-4 text-left text-xs font-semibold text-slate-500 dark:text-slate-300 uppercase">Patient</th>
-                <th className="p-4 text-left text-xs font-semibold text-slate-500 dark:text-slate-300 uppercase">Lab ID</th>
-                <th className="p-4 text-left text-xs font-semibold text-slate-500 dark:text-slate-300 uppercase">Tests</th>
-                <th className="p-4 text-center text-xs font-semibold text-slate-500 dark:text-slate-300 uppercase">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-              {loading && requests.length === 0 ? (
-                <tr>
-                  <td colSpan="4" className="p-16 text-center text-slate-500">
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                    <p className="mt-2">Loading requests...</p>
-                  </td>
-                </tr>
-              ) : error ? (
-                <tr>
-                  <td colSpan="4" className="p-16 text-center text-red-500">
-                    Error loading data: {error}
-                  </td>
-                </tr>
-              ) : sortedRequests.length === 0 ? (
-                <tr>
-                  <td colSpan="4" className="p-16 text-center text-slate-500">
-                    <HiOutlineArchive className="mx-auto h-12 w-12 text-slate-400" />
-                    <p className="mt-2 text-lg">No requests found</p>
-                    <p className="text-sm">Try checking the 'Collected' status filter.</p>
-                  </td>
-                </tr>
-              ) : (
-                sortedRequests.map((r) => (
-                  <tr key={r.id} className={`hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${r.priority === 'STAT' ? 'bg-red-50 dark:bg-red-900/20' : ''}`}>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        {r.priority === "STAT" && (
-                          <HiOutlineExclamation className="h-5 w-5 text-red-600" title="STAT" />
-                        )}
-                        <div>
-                          <p className="font-medium text-slate-900 dark:text-white">
-                            {r.first_name} {r.last_name}
-                          </p>
-                          <p className="text-sm text-slate-500 dark:text-slate-400">
-                            {r.age} yrs • {r.gender}
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4 font-mono text-indigo-600 dark:text-indigo-400">{r.lab_id}</td>
-                    <td className="p-4">
-                      <div className="flex flex-wrap gap-1">
-                        {r.tests?.slice(0, 3).map((t, i) => (
-                          <span
-                            key={i}
-                            className="text-xs bg-slate-100 dark:bg-slate-600 px-2 py-1 rounded"
-                          >
-                            {t}
-                          </span>
-                        ))}
-                        {r.tests?.length > 3 && (
-                          <span className="text-xs text-slate-500">
-                            +{r.tests.length - 3} more
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="p-4 text-center">
-                      <div className="flex justify-center gap-2">
-                        {r.status === "Pending" && (
-                          <>
-                            <button
-                              onClick={() => openConfirmModal(r)}
-                              className="bg-blue-600 text-white px-3 py-1 rounded-md text-sm font-medium hover:bg-blue-700"
-                            >
-                              Collect Sample
-                            </button>
-                            <button
-                              onClick={() => printLabel(r)}
-                              className="bg-white dark:bg-slate-600 text-slate-700 dark:text-slate-200 p-2 rounded-md border border-slate-300 dark:border-slate-500 hover:bg-slate-50"
-                            >
-                              <HiOutlinePrinter className="h-4 w-4" />
-                            </button>
-                          </>
-                        )}
-                        {r.status !== "Pending" && (
-                             <span className="text-sm font-medium text-green-600 dark:text-green-400">
-                                {STATUS_CONFIG[r.status]?.label || r.status}
-                             </span>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Modal */}
-      {isModalOpen && (
-        <ConfirmModal
-          isOpen={isModalOpen}
-          title="Confirm Collection"
-          message={
-            <div className="space-y-2">
-              <p>Mark sample as collected for:</p>
-              <p className="font-bold text-lg text-slate-900 dark:text-white">
-                {selectedRequest?.first_name} {selectedRequest?.last_name}
-              </p>
-              <p className="text-sm text-slate-600 dark:text-slate-400">Lab ID: {selectedRequest?.lab_id}</p>
+            {/* Filters and List Title */}
+            <div className="flex justify-between items-center pt-4 border-t">
+                <h2 className="text-xl font-semibold text-gray-700">Requests for Action</h2>
+                <div className="flex items-center gap-3">
+                    <button onClick={fetchWorklist} className="text-gray-600 hover:text-gray-900 transition">
+                        <RefreshCcw size={18} className={loading ? 'animate-spin' : ''} />
+                    </button>
+                    <select
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        className="border bg-white p-2 rounded-lg text-sm"
+                    >
+                        <option value="Pending">Awaiting Sample Collection</option>
+                        <option value="SampleCollected">Collected Samples</option>
+                        <option value="All">View All Statuses</option>
+                    </select>
+                </div>
             </div>
-          }
-          confirmText="Yes, Collect"
-          confirmSecondaryText="Collect & Print Label"
-          onConfirm={() => {
-            handleCollect(selectedRequest.id, false); // Collect only
-            setIsModalOpen(false);
-          }}
-          onConfirmSecondary={() => {
-            handleCollect(selectedRequest.id, true); // Collect AND Print
-            setIsModalOpen(false);
-          }}
-          onCancel={() => setIsModalOpen(false)}
-        />
-      )}
-    </div>
-  );
-};
 
-// Debounce utility (kept for function completeness)
-function debounce(func, wait) {
-  let timeout;
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
-    clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
-  };
+            {/* Worklist Table */}
+            <div className="bg-white shadow-lg rounded-xl overflow-hidden border">
+                <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-100">
+                        <tr>
+                            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Request ID</th>
+                            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Patient / ID</th>
+                            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
+                            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Tests Required</th>
+                            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                            <th className="p-3 text-center text-xs font-medium text-gray-500 uppercase">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-100">
+                        {loading && worklist.length === 0 ? (
+                            <tr><td colSpan="6" className="p-8 text-center text-gray-500"><Clock size={16} className="inline mr-2 animate-spin" /> Loading worklist...</td></tr>
+                        ) : worklist.length === 0 ? (
+                            <tr><td colSpan="6" className="p-8 text-center text-gray-500 italic">No tasks found for the selected status.</td></tr>
+                        ) : (
+                            worklist.map((item) => (
+                                <tr key={item.id} className="hover:bg-gray-50">
+                                    <td className="p-3 font-mono text-xs text-gray-800">{item.id}</td>
+                                    <td className="p-3 text-sm text-gray-900">
+                                        <p className="font-semibold">{item.first_name} {item.last_name}</p>
+                                        <p className="text-xs text-gray-500">{item.lab_id}</p>
+                                    </td>
+                                    <td className="p-3 text-sm text-gray-700 flex items-center gap-1">
+                                        <Hospital size={14} className="text-indigo-400" /> {item.ward_name || 'OPD'}
+                                    </td>
+                                    <td className="p-3 text-xs text-gray-600">{item.tests ? item.tests.join(', ') : 'N/A'}</td>
+                                    <td className="p-3"><StatusBadge status={item.status} /></td>
+                                    <td className="p-3 text-center">
+                                        {item.status === 'Pending' ? (
+                                            <button
+                                                // ✅ **NEW**: Changed handler
+                                                onClick={() => openCollectionModal(item)}
+                                                className="bg-green-600 text-white px-3 py-1 rounded-lg text-xs font-medium hover:bg-green-700 transition flex items-center justify-center gap-1 mx-auto"
+                                            >
+                                                <CheckCircle size={14} /> Collect Sample
+                                            </button>
+                                        ) : (
+                                            <Link to={`/tests/requests/${item.id}`} className="text-blue-600 hover:underline text-xs font-medium flex items-center justify-center gap-1 mx-auto">
+                                                View Request <ArrowRight size={14} />
+                                            </Link>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* --- ✅ NEW Confirmation Modal --- */}
+            {isModalOpen && selectedRequest && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white p-6 rounded-xl shadow-2xl w-full max-w-md">
+                        <h2 className="text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
+                            <Droplet size={24} className="text-red-500" />
+                            Confirm Sample Collection
+                        </h2>
+                        <p className="text-sm text-gray-600 mb-4">
+                            Please confirm collection for patient: <br />
+                            <strong className="text-lg">{selectedRequest.first_name} {selectedRequest.last_name}</strong>
+                            <span className="text-gray-500"> (ID: {selectedRequest.lab_id})</span>
+                        </p>
+
+                        <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 max-h-40 overflow-y-auto mb-6">
+                            <h4 className="font-semibold mb-2 text-gray-700">Tests to Collect:</h4>
+                            <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
+                                {selectedRequest.tests && selectedRequest.tests.length > 0 ? (
+                                    selectedRequest.tests.map((test, index) => (
+                                    <li key={index}>{test}</li>
+                                    ))
+                                ) : (
+                                    <li>No tests listed</li>
+                                )}
+                            </ul>
+                        </div>
+
+                        <div className="flex justify-end gap-3 mt-6">
+                            <button
+                                type="button"
+                                onClick={closeCollectionModal}
+                                disabled={isSubmitting}
+                                className="bg-gray-200 px-4 py-2 rounded-lg hover:bg-gray-300 text-gray-800 font-medium transition"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleConfirmCollection}
+                                disabled={isSubmitting}
+                                className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 font-medium transition flex items-center gap-2 disabled:bg-gray-400"
+                            >
+                                {isSubmitting ? <Clock className="animate-spin" size={18} /> : <CheckCircle size={18} />}
+                                {isSubmitting ? "Collecting..." : "Confirm Collection"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* --- End of Modal --- */}
+
+        </div>
+    );
 }
-
-export default PhlebotomyWorklistPage;

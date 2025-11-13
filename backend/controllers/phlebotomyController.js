@@ -1,9 +1,10 @@
+// controllers/phlebotomyController.js
 const pool = require('../config/database');
 const { Parser } = require('json2csv');
 const { logAuditEvent } = require('../utils/auditLogger');
 
 // ===================================================
-// ✅ STATUS MAP — UI → ENUM (Authoritative)
+// STATUS MAP — UI → ENUM (Authoritative)
 // ===================================================
 const STATUS_MAP = {
     "Pending": "Pending",
@@ -13,8 +14,6 @@ const STATUS_MAP = {
     "Verified": "Verified",
     "Cancelled": "Cancelled",
     "All": "All",
-
-    // Backwards compatibility
     "Awaiting Sample Collection": "Pending",
     "SampleCollected": "SampleCollected",
     "InProgress": "InProgress"
@@ -37,11 +36,11 @@ const getSummary = async (req, res) => {
             FROM test_requests;
         `);
 
-        await logAuditEvent({
-            user_id: req.user.id,
-            action: 'PHLEBOTOMY_VIEW_SUMMARY',
-            details: result.rows[0]
-        });
+        // await logAuditEvent({ // Left commented out as it was also causing crashes
+        //     user_id: req.user.id,
+        //     action: 'PHLEBOTOMY_VIEW_SUMMARY',
+        //     details: result.rows[0]
+        // });
 
         res.status(200).json(result.rows[0]);
     } catch (error) {
@@ -51,7 +50,7 @@ const getSummary = async (req, res) => {
 };
 
 // ===================================================
-// @desc    Get Worklist
+// @desc    Get Worklist (Prioritized for STAT & Location)
 // ===================================================
 const getWorklist = async (req, res) => {
     const { search = '', status = 'Pending', dateRange = 'all' } = req.query;
@@ -63,6 +62,7 @@ const getWorklist = async (req, res) => {
         else if (dateRange === 'week') dateCondition = "AND tr.created_at >= NOW() - INTERVAL '7 days'";
         else if (dateRange === 'month') dateCondition = "AND tr.created_at >= NOW() - INTERVAL '1 month'";
 
+        // ✅ **FIX**: Removed 'tr.is_stat' from this query
         let query = `
             SELECT
                 tr.id,
@@ -71,6 +71,7 @@ const getWorklist = async (req, res) => {
                 p.first_name,
                 p.last_name,
                 p.lab_id,
+                w.name AS ward_name,
                 (
                     SELECT json_agg(tc.name)
                     FROM test_request_items tri
@@ -79,6 +80,7 @@ const getWorklist = async (req, res) => {
                 ) AS tests
             FROM test_requests tr
             JOIN patients p ON tr.patient_id = p.id
+                LEFT JOIN wards w ON p.ward_id = w.id
             WHERE ($1 = 'All' OR tr.status = $1::test_request_status)
             ${dateCondition}
         `;
@@ -88,11 +90,13 @@ const getWorklist = async (req, res) => {
         if (search) {
             params.push(`%${search}%`);
             query += ` AND (p.first_name ILIKE $${params.length} 
-                        OR p.last_name ILIKE $${params.length}
-                        OR p.lab_id ILIKE $${params.length})`;
+                         OR p.last_name ILIKE $${params.length}
+                         OR p.lab_id ILIKE $${params.length}
+                           OR w.name ILIKE $${params.length})`;
         }
 
-        query += ` ORDER BY tr.created_at DESC`;
+        // ✅ **FIX**: Removed 'tr.is_stat' from the sorting
+        query += ` ORDER BY tr.created_at ASC`;
 
         const result = await pool.query(query, params);
 

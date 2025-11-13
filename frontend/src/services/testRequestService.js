@@ -1,11 +1,11 @@
 const API_URL = "/api/test-requests";
 
 /**
- * 🌐 Robust API fetch wrapper with clear error handling (UNCHANGED)
+ * 🌐 Robust API fetch wrapper with clear error handling
  */
 async function apiFetch(url, options = {}) {
   try {
-    const res = await fetch(url, options);
+    const res = await fetch(url, options); // ✅ fixed: no double commas
 
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
@@ -22,7 +22,7 @@ async function apiFetch(url, options = {}) {
     if (res.status === 204) return null;
     return await res.json();
   } catch (err) {
-    console.error("❌ API Error:", err.message);
+    console.error("❌ API Error:", err.message); // ✅ fixed: proper syntax
     throw new Error(err.message || "Network error");
   }
 }
@@ -47,17 +47,15 @@ const getTestRequestById = (requestId, token) => {
   });
 };
 
-// 💡 NEW FUNCTION: Get all test requests for a specific patient
+/** Get all test requests for a specific patient */
 const getTestRequestsByPatientId = (patientId, token) => {
   if (!patientId || patientId === "undefined")
     throw new Error("Invalid patient ID");
 
-  // Calls the new route added to the Express router: /api/test-requests/patient/:patientId
-  return apiFetch(`${API_URL}/patient/${patientId}`, { 
+  return apiFetch(`${API_URL}/patient/${patientId}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 };
-
 
 /** Update workflow status */
 const updateTestRequestStatus = (requestId, status, token) => {
@@ -74,10 +72,7 @@ const updateTestRequestStatus = (requestId, status, token) => {
   });
 };
 
-/**
- * 🧬 Create new test request (always sends testIds[])
- * Backend expands panels automatically. (UNCHANGED)
- */
+/** Create new test request */
 const createTestRequest = async (requestData, token) => {
   const { patientId, testIds = [] } = requestData || {};
 
@@ -85,15 +80,11 @@ const createTestRequest = async (requestData, token) => {
   if (!Array.isArray(testIds) || testIds.length === 0)
     throw new Error("At least one test or panel must be selected");
 
-  // ✅ Ensure we send clean numeric IDs
   const normalizedTestIds = testIds
     .map((id) => (typeof id === "object" ? Number(id.id) : Number(id)))
     .filter(Boolean);
 
-  const payload = {
-    patientId: Number(patientId),
-    testIds: normalizedTestIds,
-  };
+  const payload = { patientId: Number(patientId), testIds: normalizedTestIds };
 
   console.log("📦 Sending Test Request Payload:", payload);
 
@@ -140,7 +131,6 @@ const getResultEntryTemplate = async (requestId, token) => {
     const data = await apiFetch(`${API_URL}/${requestId}/result-entry`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-
     return data;
   } catch (err) {
     console.error("❌ getResultEntryTemplate error:", err.message);
@@ -180,12 +170,12 @@ const verifyResults = (requestId, action, comment, token) => {
 };
 
 /* ===========================================================
- *  EXPORTS
+ * EXPORTS
  * =========================================================== */
 export default {
   getAllTestRequests,
   getTestRequestById,
-  getTestRequestsByPatientId, // 💡 NEW EXPORT
+  getTestRequestsByPatientId,
   updateTestRequestStatus,
   createTestRequest,
   processPayment,

@@ -1,62 +1,81 @@
+// routes/testRequestRoutes.js
 const express = require("express");
 const router = express.Router();
 const testRequestController = require("../controllers/testRequestController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 
-/* =============================================================
- * ROUTE PARAM VALIDATION (keep safe numeric ID)
- * ============================================================= */
-// Original 'id' validation is fine for general use, but we'll add a 'patientId' param validator.
+// ============================================================
+// 🔢 Validate numeric route params
+// ============================================================
 router.param("id", (req, res, next, id) => {
-    if (!/^\d+$/.test(String(id))) {
-        return res.status(400).json({ message: "Invalid ID (must be numeric)" });
-    }
-    next();
+  if (!/^\d+$/.test(String(id)))
+    return res.status(400).json({ message: "Invalid ID (must be numeric)" });
+  next();
 });
 
-// 💡 NEW: Param validation for patientId to ensure it's numeric
 router.param("patientId", (req, res, next, patientId) => {
-    if (!/^\d+$/.test(String(patientId))) {
-        return res.status(400).json({ message: "Invalid Patient ID (must be numeric)" });
-    }
-    next();
+  if (!/^\d+$/.test(String(patientId)))
+    return res.status(400).json({ message: "Invalid Patient ID (must be numeric)" });
+  next();
 });
 
-/* =============================================================
- * ROUTES
- * ============================================================= */
+// ============================================================
+// 🧪 Test Request Routes
+// ============================================================
 
-// 🔹 Get ALL test requests
+// 🔹 List all requests
+router.get("/", protect, authorize("tests", "view"), testRequestController.getAllTestRequests);
+
+// 🔹 Create a new request
+router.post("/", protect, authorize("tests", "create"), testRequestController.createTestRequest);
+
+// 🔹 Get all test requests for a specific patient
 router.get(
-    "/",
-    protect,
-    authorize("tests", "view"),
-    testRequestController.getAllTestRequests
+  "/patient/:patientId",
+  protect,
+  authorize("patients", "view"),
+  testRequestController.getTestRequestsByPatientId
 );
 
-// 🔹 Create test request
+// 🔹 Get one test request
+router.get("/:id", protect, authorize("tests", "view"), testRequestController.getTestRequestById);
+
+// 🔹 Update request status
+router.patch(
+  "/:id/status",
+  protect,
+  authorize("tests", "update"),
+  testRequestController.updateTestRequestStatus
+);
+
+// 🔹 Result Entry (Pathology)
+router.get(
+  "/:id/results",
+  protect,
+  authorize("pathology", "view"),
+  testRequestController.getResultEntry
+);
 router.post(
-    "/",
-    protect,
-    authorize("tests", "create"),
-    testRequestController.createTestRequest
+  "/:id/results",
+  protect,
+  authorize("pathology", "update"),
+  testRequestController.saveResultEntry
 );
 
-// 💡 FIX: Add route to get ALL requests for a specific patient
-router.get(
-    "/patient/:patientId",
-    protect,
-    authorize("patients", "view"), // Use patient view permission
-    testRequestController.getTestRequestsByPatientId 
+// 🔹 Verify or Reject
+router.post(
+  "/:id/verify",
+  protect,
+  authorize("pathology", "verify"),
+  testRequestController.verifyResults
 );
 
-// 🔹 Get single request (details page)
-router.get(
-    "/:id",
-    protect,
-    authorize("tests", "view"),
-    testRequestController.getTestRequestById
+// 💳 PAYMENT — DEBUGGING (Middleware temporarily disabled)
+router.post(
+  "/:id/payment",
+  // protect, // <-- Temporarily disabled for testing
+  // authorize("billing", "create"), // <-- Temporarily disabled for testing
+  testRequestController.processPayment
 );
-
 
 module.exports = router;

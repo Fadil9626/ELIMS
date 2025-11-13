@@ -17,18 +17,23 @@ async function recordLogin(userId) {
 }
 
 // Build normalized RBAC payload for a user id
-async function buildRbacForUser(userId) {
-  // roles (may be multiple)
+async function buildRbacForUser(userId, primaryRoleId) {
+  
   const { rows: roleRows } = await pool.query(
     `
     SELECT r.id, r.name,
            lower(replace(r.name, ' ', '_')) AS slug
+    FROM roles r
+    WHERE r.id = $1  -- $1 is primaryRoleId
+    UNION
+    SELECT r.id, r.name,
+           lower(replace(r.name, ' ', '_')) AS slug
     FROM user_roles ur
     JOIN roles r ON r.id = ur.role_id
-    WHERE ur.user_id = $1
-    ORDER BY r.id
+    WHERE ur.user_id = $2 -- $2 is userId
+    ORDER BY id
     `,
-    [userId]
+    [primaryRoleId, userId]
   );
 
   const roles = roleRows.map(r => ({
@@ -37,16 +42,17 @@ async function buildRbacForUser(userId) {
     slug: r.slug,
   }));
 
+  const roleIds = roles.map(r => r.id); // Get all role IDs
+
   // permissions via roles
   const { rows: permRows } = await pool.query(
     `
     SELECT DISTINCT p.resource, p.action
-    FROM user_roles ur
-    JOIN role_permissions rp ON rp.role_id = ur.role_id
+    FROM role_permissions rp
     JOIN permissions p ON p.id = rp.permission_id
-    WHERE ur.user_id = $1
+    WHERE rp.role_id = ANY($1::int[]) -- Use the combined list of role IDs
     `,
-    [userId]
+    [roleIds] // Pass the correct list
   );
 
   // slugs and map
@@ -77,6 +83,8 @@ async function buildRbacForUser(userId) {
 
 // -------------------- REGISTER (optional) --------------------
 exports.registerUser = async (req, res) => {
+  // This function will need to be updated to accept `department`
+  // But for now, we'll focus on login.
   const { full_name, email, password } = req.body;
   if (!full_name || !email || !password)
     return res.status(400).json({ message: "Full name, email & password required" });
@@ -107,8 +115,9 @@ exports.loginUser = async (req, res) => {
     return res.status(400).json({ message: "Email and password required" });
 
   try {
+    // ✅ **FIX 1: Fetch the user's department**
     const { rows, rowCount } = await pool.query(
-      `SELECT id, full_name, email, password_hash, is_active
+      `SELECT id, full_name, email, password_hash, is_active, role_id, department
        FROM users WHERE email = $1`,
       [email]
     );
@@ -121,7 +130,7 @@ exports.loginUser = async (req, res) => {
 
     await recordLogin(u.id);
 
-    const rbac = await buildRbacForUser(u.id);
+    const rbac = await buildRbacForUser(u.id, u.role_id);
     const token = signToken(u.id);
 
     await logAuditEvent({
@@ -138,10 +147,12 @@ exports.loginUser = async (req, res) => {
         id: u.id,
         full_name: u.full_name,
         email: u.email,
+        department: u.department || null, // ✅ **FIX 2: Add department to user object**
         role_name: rbac.primary_role?.name || null,
         role_slug: rbac.primary_role?.slug || null,
-        roles: rbac.roles,                // full list
+        roles: rbac.roles,                
         permission_slugs: rbac.permission_slugs,
+        permissions_map: rbac.permission_map,
       },
     });
   } catch (err) {
@@ -153,23 +164,26 @@ exports.loginUser = async (req, res) => {
 // -------------------- GET /me (optional but recommended) --------------------
 exports.getMe = async (req, res) => {
   try {
+    // ✅ **FIX 3: Fetch the user's department**
     const { rows, rowCount } = await pool.query(
-      `SELECT id, full_name, email FROM users WHERE id = $1`,
+      `SELECT id, full_name, email, role_id, department FROM users WHERE id = $1`,
       [req.user.id]
     );
     if (!rowCount) return res.status(404).json({ message: "User not found" });
 
     const u = rows[0];
-    const rbac = await buildRbacForUser(u.id);
+    const rbac = await buildRbacForUser(u.id, u.role_id);
 
     res.json({
       id: u.id,
       full_name: u.full_name,
       email: u.email,
+      department: u.department || null, // ✅ **FIX 4: Add department to response**
       role_name: rbac.primary_role?.name || null,
       role_slug: rbac.primary_role?.slug || null,
       roles: rbac.roles,
       permission_slugs: rbac.permission_slugs,
+      permissions_map: rbac.permission_map,
     });
   } catch (err) {
     console.error("getMe error:", err);

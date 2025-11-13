@@ -1,36 +1,64 @@
 import React from "react";
 import { useAuth } from "../../context/AuthContext";
 
-// ✅ Import your REAL admin dashboard UI
-import AdminDashboardPage from "../dashboard/AdminDashboardPage";
+// ✅ Real dashboards
+import AdminDashboardPage from "./AdminDashboardPage";
+import ReceptionDashboardPage from "./ReceptionDashboardPage";
 
-// Later we will replace these placeholders:
-const PathologistDash = () => <div className="p-6">Pathologist Worklist</div>;
-const PhlebotomyDash = () => <div className="p-6">Phlebotomy Worklist</div>;
-const ReceptionDash = () => <div className="p-6">Reception Dashboard</div>;
-const FinanceDash = () => <div className="p-6">Finance Dashboard</div>;
-const InventoryDash = () => <div className="p-6">Inventory Dashboard</div>;
-const ClinicianDash = () => <div className="p-6">Doctor / Clinician View</div>;
+// ✅ New unified dashboard (Lab Tech + Pathologist)
+import PathologyDashboardS3 from "../pathologist/PathologyDashboardS3";
+
+import PhlebotomyWorklistPage from "../phlebotomy/PhlebotomyWorklistPage";
+import InventoryPage from "../inventory/InventoryPage";
+
+const Placeholder = ({ label }) => (
+  <div className="p-6 text-gray-600 text-lg">{label}</div>
+);
 
 export default function DashboardRouter() {
-  const { user } = useAuth();
-  if (!user) return null;
+  const { user, can } = useAuth(); 
+  if (!user) return null; // Wait for user to be loaded
 
-  // Normalize role name
-  const role = (user.role_name || "").toLowerCase().trim();
+  // Check for permissions using the correct CAPITALIZED resource names
+  const isSuperAdmin = can("*:*");
+  const isAdmin = can("Admin", "View");
+  const isReception = can("Patients", "Create");
+  const isLabUser = can("Results", "Enter") || can("Pathologist", "Verify");
+  const isPhlebotomist = can("Phlebotomy", "View");
+  const isInventory = can("Inventory", "View");
+  const isDoctor = can("Reports", "View");
+  const isFinance = can("Billing", "Create");
 
-  // ✅ SUPER ADMIN + ADMIN both use Admin Dashboard
-  if (role.includes("super")) return <AdminDashboardPage />;
-  if (role.includes("admin")) return <AdminDashboardPage />;
+  // ✅ **FIX: The 'isLabUser' check is now BEFORE 'isReception'**
+  
+  if (isSuperAdmin || isAdmin) {
+    return <AdminDashboardPage />;
+  }
 
-  if (role.includes("reception")) return <ReceptionDash />;
-  if (role.includes("phleb")) return <PhlebotomyDash />;
-  if (role.includes("path")) return <PathologistDash />;
-  if (role.includes("finance") || role.includes("account")) return <FinanceDash />;
-  if (role.includes("inventory")) return <InventoryDash />;
-  if (role.includes("doctor") || role.includes("clinician")) return <ClinicianDash />;
-  if (role.includes("scientist") || role.includes("lab tech")) return <PathologistDash />;
+  // If a user can enter/verify results, send them to the lab dashboard
+  if (isLabUser) {
+    return <PathologyDashboardS3 />;
+  }
 
-  // Final fallback
-  return <AdminDashboardPage />;
+  // If a user can create patients (and is not a lab user), send them to reception
+  if (isReception) {
+    return <ReceptionDashboardPage />;
+  }
+  
+  // Other roles
+  if (isPhlebotomist) {
+    return <PhlebotomyWorklistPage />;
+  }
+  if (isInventory) {
+    return <InventoryPage />;
+  }
+  if (isFinance) {
+    return <Placeholder label="Finance Dashboard" />; 
+  }
+  if (isDoctor) {
+    return <Placeholder label="Clinician Dashboard" />;
+  }
+
+  // Fallback for any other roles (like "Viewer")
+  return <Placeholder label={`Welcome, ${user.full_name}`} />;
 }

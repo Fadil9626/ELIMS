@@ -1,3 +1,4 @@
+// services/phlebotomyService.js
 const API_URL = '/api/phlebotomy/';
 
 const getSummary = async (token) => {
@@ -8,7 +9,8 @@ const getSummary = async (token) => {
   return res.json();
 };
 
-const getWorklist = async (token, filters = {}) => {
+// ✅ **FIX**: Swapped 'token' and 'filters' arguments to match your component's call
+const getWorklist = async (filters = {}, token) => {
   const query = new URLSearchParams(filters).toString();
   const res = await fetch(`${API_URL}worklist?${query}`, {
     headers: { Authorization: `Bearer ${token}` },

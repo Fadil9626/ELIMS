@@ -12,7 +12,12 @@ const AdminDashboardPage = () => {
   const fetchStats = async () => {
     setLoading(true);
     try {
-      const res = await authedFetch(`/api/dashboard/admin?period=${period}`);
+      // ❌ OLD, INCORRECT URL
+      // const res = await authedFetch(`/api/dashboard/admin?period=${period}`);
+      
+      // ✅ NEW, CORRECT URL (matches your server.js)
+      const res = await authedFetch(`/api/billing/dashboard-stats?period=${period}`);
+
       const text = await res.text();
 
       let data;

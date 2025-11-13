@@ -9,6 +9,7 @@ const { emitToDepartment } = require("../utils/socketEmitter");
 // 🧮 Helper: Reference details (range / qualitative)
 // ------------------------------------------------------------
 async function getRefDetails(client, analyteId, value) {
+  // ... (Helper code is unchanged)
   let ref_text = null;
   let type = "quantitative";
   let qualitative_values = [];
@@ -85,7 +86,6 @@ async function getRefDetails(client, analyteId, value) {
 
   return { ref_text, type, qualitative_values, flag };
 }
-
 // ------------------------------------------------------------
 // 🔎 Status helpers
 // ------------------------------------------------------------
@@ -116,12 +116,18 @@ function normalizeStatus(input) {
 }
 
 // ============================================================
-// 📋 Worklist (FINAL - RLS Implemented)
+// 📋 Worklist (FINAL - RLS & Department Filter Implemented)
 // ============================================================
 const getPathologistWorklist = async (req, res) => {
   const { from, to, status, search } = req.query;
-  // Get current user ID for RLS
-  const { id: currentUserId, role_id, department } = req.user || {}; 
+  
+  // ✅ **FIX 1: Get full user context from req.user**
+  const {
+    id: currentUserId,
+    department: userDepartment,
+    permissions_map
+  } = req.user || {};
+  const isSuperAdmin = permissions_map?.["*:*"] === true;
 
   try {
     const where = [];
@@ -132,11 +138,17 @@ const getPathologistWorklist = async (req, res) => {
     where.push(`(tri.reviewed_by_id IS NULL OR tri.reviewed_by_id = $${i++})`);
     params.push(currentUserId);
 
-    // Limit by pathologist's department (RBAC)
-    if (role_id === 3 && department) {
+    // ✅ **FIX 2: Implement robust department filtering**
+    if (!isSuperAdmin) {
+      if (!userDepartment) {
+        // Not an admin and no department assigned = can't see any lab work.
+        return res.status(200).json([]);
+      }
+      // Is not a Super Admin, so filter by their department
       where.push(`d.name = $${i++}`);
-      params.push(department);
+      params.push(userDepartment);
     }
+    // If isSuperAdmin, this block is skipped, and no department filter is added.
 
     // Only atomic tests in the worklist (not the parent panel rows)
     where.push(`COALESCE(tc.is_panel, FALSE) = FALSE`);
@@ -161,9 +173,9 @@ const getPathologistWorklist = async (req, res) => {
     if (search) {
       where.push(
         `(p.first_name ILIKE $${i} 
-          OR p.last_name ILIKE $${i}
-          OR p.lab_id ILIKE $${i}
-          OR tr.id::text ILIKE $${i})`
+           OR p.last_name ILIKE $${i}
+           OR p.lab_id ILIKE $${i}
+           OR tr.id::text ILIKE $${i})`
       );
       params.push(`%${search}%`);
       i++;
@@ -204,25 +216,26 @@ const getPathologistWorklist = async (req, res) => {
 // 📄 Build Result Template
 // ============================================================
 const getResultTemplate = async (req, res) => {
+  // ... (This function is unchanged)
   const { requestId } = req.params;
   const client = await pool.connect();
 
   try {
     const { rows: allItems } = await client.query(
       `SELECT 
-          tri.id AS request_item_id,
-          tri.test_catalog_id AS test_id,
-          tc.name AS test_name,
-          tc.is_panel,
-          tc.department_id,
-          d.name AS department_name,
-          tri.result_value,
-          tri.status
-        FROM test_request_items tri
-        JOIN test_catalog tc ON tc.id = tri.test_catalog_id
-        LEFT JOIN departments d ON tc.department_id = d.id
-        WHERE tri.test_request_id = $1
-        ORDER BY tc.is_panel DESC, tri.id`,
+         tri.id AS request_item_id,
+         tri.test_catalog_id AS test_id,
+         tc.name AS test_name,
+         tc.is_panel,
+         tc.department_id,
+         d.name AS department_name,
+         tri.result_value,
+         tri.status
+       FROM test_request_items tri
+       JOIN test_catalog tc ON tc.id = tri.test_catalog_id
+       LEFT JOIN departments d ON tc.department_id = d.id
+       WHERE tri.test_request_id = $1
+       ORDER BY tc.is_panel DESC, tri.id`,
       [requestId]
     );
 
@@ -244,19 +257,19 @@ const getResultTemplate = async (req, res) => {
 
       const { rows: analytes } = await client.query(
         `SELECT 
-            tpa.analyte_id AS test_id,
-            a.name AS test_name,
-            u.symbol AS unit_symbol,
-            tri_a.id AS request_item_id,
-            tri_a.result_value,
-            tri_a.status
-          FROM test_panel_analytes tpa
-          JOIN test_catalog a ON a.id = tpa.analyte_id
-          LEFT JOIN units u ON u.id = a.unit_id
-          LEFT JOIN test_request_items tri_a
-            ON tri_a.parent_id = $2 AND tri_a.test_catalog_id = tpa.analyte_id
-          WHERE tpa.panel_id = $1
-          ORDER BY a.name`,
+           tpa.analyte_id AS test_id,
+           a.name AS test_name,
+           u.symbol AS unit_symbol,
+           tri_a.id AS request_item_id,
+           tri_a.result_value,
+           tri_a.status
+         FROM test_panel_analytes tpa
+         JOIN test_catalog a ON a.id = tpa.analyte_id
+         LEFT JOIN units u ON u.id = a.unit_id
+         LEFT JOIN test_request_items tri_a
+           ON tri_a.parent_id = $2 AND tri_a.test_catalog_id = tpa.analyte_id
+         WHERE tpa.panel_id = $1
+         ORDER BY a.name`,
         [item.test_id, item.request_item_id]
       );
 
@@ -282,9 +295,9 @@ const getResultTemplate = async (req, res) => {
     for (const item of remainingItems) {
       const { rows: u } = await client.query(
         `SELECT u.symbol 
-            FROM test_catalog t 
-            LEFT JOIN units u ON u.id = t.unit_id 
-          WHERE t.id = $1`,
+           FROM test_catalog t 
+           LEFT JOIN units u ON u.id = t.unit_id 
+         WHERE t.id = $1`,
         [item.test_id]
       );
 
@@ -313,6 +326,7 @@ const getResultTemplate = async (req, res) => {
 // 🧪 Submit Result (saves value + JSONB, sets 'Completed')
 // ============================================================
 const submitResult = async (req, res) => {
+  // ... (This function is unchanged and already has department checks)
   const { itemId: testItemId } = req.params;
   const { result } = req.body;
   const { id: userId, full_name, role_id, department } = req.user || {};
@@ -329,9 +343,9 @@ const submitResult = async (req, res) => {
 
     const { rows } = await client.query(
       `SELECT tri.test_request_id, tri.result_value, d.name AS department_name
-          FROM test_request_items tri
-          JOIN test_catalog tc ON tri.test_catalog_id = tc.id
-          LEFT JOIN departments d ON tc.department_id = d.id
+         FROM test_request_items tri
+         JOIN test_catalog tc ON tri.test_catalog_id = tc.id
+         LEFT JOIN departments d ON tc.department_id = d.id
         WHERE tri.id = $1`,
       [testItemId]
     );
@@ -342,15 +356,13 @@ const submitResult = async (req, res) => {
     if (role_id === 3 && department && department !== department_name)
       throw new Error("Unauthorized for this department.");
 
-    // const oldJson = JSON.stringify({ value: result_value ?? null });
-
     await client.query(
       `UPDATE test_request_items
-          SET result_value = $1,
-              result_data  = $2::jsonb,
-              status       = 'Completed',
-              updated_at   = NOW()
-        WHERE id = $3`,
+         SET result_value = $1,
+             result_data  = $2::jsonb,
+             status       = 'Completed',
+             updated_at   = NOW()
+       WHERE id = $3`,
       [cleanResult, newResultJson, testItemId]
     );
 
@@ -380,6 +392,7 @@ const submitResult = async (req, res) => {
 // ✅ Verify Result (marks item Verified; completes request if all verified)
 // ============================================================
 const verifyResult = async (req, res) => {
+  // ... (This function is unchanged)
   const { itemId: id } = req.params;
   const { full_name, department } = req.user || {};
   const client = await pool.connect();
@@ -403,17 +416,17 @@ const verifyResult = async (req, res) => {
 
     await client.query(
       `UPDATE test_request_items
-          SET status = 'Verified',
-              verified_name = $1,
-              verified_at = NOW(),
-              updated_at = NOW()
-        WHERE id = $2`,
+         SET status = 'Verified',
+             verified_name = $1,
+             verified_at = NOW(),
+             updated_at = NOW()
+       WHERE id = $2`,
       [full_name, id]
     );
 
     const { rows: check } = await client.query(
       `SELECT COUNT(*) FILTER (WHERE status <> 'Verified') AS unverified
-          FROM test_request_items WHERE test_request_id = $1`,
+         FROM test_request_items WHERE test_request_id = $1`,
       [testRequestId]
     );
 
@@ -448,18 +461,19 @@ const verifyResult = async (req, res) => {
 // 🔓 Reopen (sets 'Reopened')
 // ============================================================
 const reopenResult = async (req, res) => {
+  // ... (This function is unchanged)
   const { itemId: id } = req.params;
   const { department, full_name } = req.user || {};
 
   try {
     const { rows } = await pool.query(
       `UPDATE test_request_items
-          SET status = 'Reopened',
-              verified_name = NULL,
-              verified_at = NULL,
-              updated_at = NOW()
-        WHERE id = $1
-        RETURNING *`,
+         SET status = 'Reopened',
+             verified_name = NULL,
+             verified_at = NULL,
+             updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
       [id]
     );
 
@@ -486,26 +500,25 @@ const reopenResult = async (req, res) => {
 // 📝 Mark Under Review (CLAIMS ASSIGNMENT, uses enum 'UnderReview')
 // ============================================================
 const markResultForReview = async (req, res) => {
+  // ... (This function is unchanged)
   const { itemId: id } = req.params;
-  // Get both ID and Name to claim the assignment
   const { id: userId, full_name, department } = req.user || {}; 
 
   try {
-    // 💡 RLS IMPLEMENTATION: Set status, reviewed_by_name, and reviewed_by_id
     const { rows } = await pool.query(
       `UPDATE test_request_items
-          SET status = 'UnderReview',
-              reviewed_by_name = $1, 
-              reviewed_by_id = $2, 
-              reviewed_at = NOW(),
-              updated_at = NOW()
-        WHERE id = $3
-        RETURNING *`,
-      [full_name, userId, id] // Passed parameters: [1]=full_name, [2]=userId, [3]=itemId
+         SET status = 'UnderReview',
+             reviewed_by_name = $1, 
+             reviewed_by_id = $2, 
+             reviewed_at = NOW(),
+             updated_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [full_name, userId, id]
     );
 
     if (!rows.length)
-      return res.status(404).json({ message: "Test not found" });
+      return res.status(4404).json({ message: "Test not found" });
 
     emitToDepartment(req, department, "result_reviewed", {
       event: "result_reviewed",
@@ -527,6 +540,7 @@ const markResultForReview = async (req, res) => {
 // 🚀 Release Report (request-level)
 // ============================================================
 const releaseReport = async (req, res) => {
+  // ... (This function is unchanged)
   const { requestId } = req.params;
   const { department } = req.user || {};
   const client = await pool.connect();
@@ -541,17 +555,14 @@ const releaseReport = async (req, res) => {
     if (!rowCount)
       return res.status(404).json({ message: "Request not found" });
 
-    // Update item statuses to 'Released'
     await client.query(
       `UPDATE test_request_items
-          SET status = 'Released', updated_at = NOW()
-        WHERE test_request_id = $1
-          AND status IN ('Completed','Verified','UnderReview')`,
+         SET status = 'Released', updated_at = NOW()
+       WHERE test_request_id = $1
+         AND status IN ('Completed','Verified','UnderReview')`,
       [requestId]
     );
 
-    // 💡 FIX: Update request status using 'Released'. This assumes you've added 'Released' to test_request_status ENUM.
-    // If you have NOT added 'Released' to the ENUM, change 'Released' to 'Verified' or 'Completed' below.
     await client.query(
       `UPDATE test_requests SET status = 'Released', updated_at = NOW() WHERE id = $1`,
       [requestId]
@@ -572,7 +583,6 @@ const releaseReport = async (req, res) => {
     await client.query("ROLLBACK");
     console.error("❌ Release error:", e.message);
     
-    // Check if the error suggests the missing ENUM value
     if (e.message.includes('invalid input value for enum test_request_status')) {
         console.warn("WARN: test_request_status ENUM likely missing 'Released'. Consider adding it to your schema.");
     }
@@ -587,15 +597,21 @@ const releaseReport = async (req, res) => {
 // 📊 Status Counts (optionally scoped by department)
 // ============================================================
 const getStatusCounts = async (req, res) => {
-  const { role_id, department } = req.user || {};
-  const isPathologist = role_id === 3 && department;
-
+  // ✅ **FIX 3: Updated to use new permission system**
+  const { department: userDepartment, permissions_map } = req.user || {};
+  const isSuperAdmin = permissions_map?.["*:*"] === true;
+  
   try {
     const where = [];
     const params = [];
-    if (isPathologist) {
+
+    // Filter by department if user is NOT a super admin and HAS a department
+    if (!isSuperAdmin && userDepartment) {
       where.push("d.name = $1");
-      params.push(department);
+      params.push(userDepartment);
+    } else if (!isSuperAdmin && !userDepartment) {
+      // No admin, no dept = see nothing
+      return res.status(200).json({});
     }
 
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -624,12 +640,13 @@ const getStatusCounts = async (req, res) => {
 // 🧾 Result History (if table exists)
 // ============================================================
 const getResultHistory = async (req, res) => {
+  // ... (This function is unchanged)
   const { itemId: id } = req.params;
   try {
     const { rows } = await pool.query(
       `SELECT ral.old_result, ral.new_result, ral.changed_at, u.full_name AS changed_by
-          FROM result_audit_logs ral
-          LEFT JOIN users u ON ral.changed_by = u.id
+         FROM result_audit_logs ral
+         LEFT JOIN users u ON ral.changed_by = u.id
         WHERE ral.test_item_id = $1
         ORDER BY ral.changed_at DESC`,
       [id]
@@ -645,6 +662,7 @@ const getResultHistory = async (req, res) => {
 // 🔬 Analyzer Results (optional integration)
 // ============================================================
 const getAnalyzerResults = async (req, res) => {
+  // ... (This function is unchanged)
   try {
     const id = parseInt(req.params.itemId, 10);
     if (!Number.isFinite(id))
@@ -652,7 +670,7 @@ const getAnalyzerResults = async (req, res) => {
 
     const { rows } = await pool.query(
       `SELECT test_item_id, instrument, sample_id, results, analyzer_meta, updated_at
-          FROM test_item_results WHERE test_item_id = $1`,
+         FROM test_item_results WHERE test_item_id = $1`,
       [id]
     );
     if (!rows.length)
@@ -668,6 +686,7 @@ const getAnalyzerResults = async (req, res) => {
 // ♻️ Update Item Status (validates enum)
 // ============================================================
 const updateRequestItemStatus = async (req, res) => {
+  // ... (This function is unchanged)
   const { itemId } = req.params;
   const { status } = req.body;
   const { full_name, department } = req.user || {};
@@ -682,9 +701,9 @@ const updateRequestItemStatus = async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE test_request_items
-          SET status = $1, updated_at = NOW()
-        WHERE id = $2
-        RETURNING test_request_id, id`,
+         SET status = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING test_request_id, id`,
       [normalized, itemId]
     );
     if (!rows.length)

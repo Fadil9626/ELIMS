@@ -1,7 +1,7 @@
 // ============================================================
-// AUTH MIDDLEWARE (Final Stable Version)
+// AUTH MIDDLEWARE (Enhanced Stable Version)
 // protect → validates JWT + loads roles + permissions
-// authorize(resource, action) → checks permissions
+// authorize(resource, action) → checks permissions (case-insensitive)
 // ============================================================
 
 const jwt = require("jsonwebtoken");
@@ -54,7 +54,7 @@ function toMatrix(map) {
 // ------------------------------------------------------------
 async function hydrateUserContext(userId) {
   const userRes = await pool.query(
-    `SELECT u.id, u.full_name, u.email, u.role_id, u.profile_image_url
+    `SELECT u.id, u.full_name, u.email, u.role_id, u.profile_image_url, u.department
      FROM users u
      WHERE u.id = $1`,
     [userId]
@@ -63,7 +63,7 @@ async function hydrateUserContext(userId) {
   if (!userRes.rows.length) return null;
   const user = userRes.rows[0];
 
-  // Load ALL roles (primary + additional)
+  // Load primary + secondary roles
   const roleRes = await pool.query(
     `SELECT r.id, r.name
      FROM roles r
@@ -72,13 +72,13 @@ async function hydrateUserContext(userId) {
      SELECT r.id, r.name
      FROM user_roles ur
      JOIN roles r ON r.id = ur.role_id
-     WHERE ur.user_id = $1`,
-    [userId]
+     WHERE ur.user_id = $2`,
+    [user.role_id, userId]
   );
 
   const roles = roleRes.rows;
-  const roleIds = roles.map(r => r.id);
-  const roleNames = roles.map(r => r.name.toLowerCase());
+  const roleIds = roles.map((r) => r.id);
+  const roleNames = roles.map((r) => r.name.toLowerCase());
 
   // Load permissions
   const permsRes = await pool.query(
@@ -95,7 +95,7 @@ async function hydrateUserContext(userId) {
   const isSuperAdmin =
     roleNames.includes("superadmin") ||
     roleNames.includes("super admin") ||
-    roleIds.includes(1); // ensure role id 1 always bypasses
+    roleIds.includes(1);
 
   if (isSuperAdmin) {
     permission_map["*:*"] = true;
@@ -106,7 +106,8 @@ async function hydrateUserContext(userId) {
     full_name: user.full_name,
     email: user.email,
     profile_image_url: user.profile_image_url,
-    roles: roles.map(r => r.name),
+    department: user.department || null,
+    roles: roles.map((r) => r.name),
     role_ids: roleIds,
     permission_slugs: Object.keys(permission_map),
     permissions_map: permission_map,
@@ -143,15 +144,44 @@ const protect = async (req, res, next) => {
 };
 
 // ------------------------------------------------------------
-// authorize middleware
+// authorize middleware (improved - case-insensitive, multi-resource support)
 // ------------------------------------------------------------
-const authorize = (resource, action) => (req, res, next) => {
+const authorize = (resources, action) => (req, res, next) => {
   if (!req.user) return res.status(401).json({ message: "Unauthorized" });
 
-  // ✅ SuperAdmin bypass
-  if (req.user.permissions_map["*:*"]) return next();
+  // Normalize helper
+  const normalize = (v) =>
+    String(v || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_");
 
-  if (!req.user.permissions_map[`${resource}:${action}`]) {
+  // Build normalized permission set
+  const userPerms = new Set(
+    Object.keys(req.user.permissions_map || {}).map((k) => normalize(k))
+  );
+
+  // Superadmin bypass
+  if (userPerms.has("*:*")) return next();
+
+  // Allow array or single resource
+  const resourceList = Array.isArray(resources) ? resources : [resources];
+
+  // Build needed keys
+  const needed = resourceList.map(
+    (r) => `${normalize(r)}:${normalize(action)}`
+  );
+
+  // Check for match
+  const allowed = needed.some((key) => userPerms.has(key));
+
+  if (!allowed) {
+    console.warn("🚫 Forbidden access", {
+      user: req.user.email,
+      roles: req.user.roles,
+      needed,
+      have: [...userPerms],
+    });
     return res.status(403).json({ message: "Forbidden" });
   }
 

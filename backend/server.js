@@ -239,6 +239,8 @@ app.use("/api/instruments", routes.instruments);
 app.use("/api/lis", routes.lis);
 app.use("/api/me", routes.me);
 app.use("/api", routes.public);
+app.use("/api/visits", require("./routes/visitRoutes"));
+
 
 // ------------------------------------------------------------
 // 🧭 Inline DASHBOARD endpoints (so curl works immediately)

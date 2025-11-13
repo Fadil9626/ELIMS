@@ -1,3 +1,4 @@
+// controllers/reportsController.js
 const pool = require('../config/database');
 const { logAuditEvent } = require('../utils/auditLogger');
 
@@ -82,7 +83,7 @@ function computeFlag(value, low, high) {
 }
 
 /* ------------------------------------------------------------
- * | 📋 REPORT LIST (No change needed)
+ * | 📋 REPORT LIST (Fixed to show Verified/Released)
  * ------------------------------------------------------------
  */
 
@@ -108,7 +109,10 @@ const getAllCompletedReports = async (req, res) => {
       JOIN test_request_items tri ON tr.id = tri.test_request_id
       JOIN test_catalog tc ON tri.test_catalog_id = tc.id
       LEFT JOIN departments d ON tc.department_id = d.id
-      WHERE tr.status IN ('Completed', 'Released')
+      
+      -- ✅ **FIX**: Changed 'Completed' to 'Verified'
+      -- This ensures only fully verified or released reports appear on this page.
+      WHERE tr.status IN ('Verified', 'Released')
     `;
 
     const params = [];
@@ -366,7 +370,7 @@ const getReportByRequestId = async (req, res) => {
               flag,
               note: '',
               verified_name: child.verified_name, // Pass child verified data
-              verified_at: child.verified_at,       // Pass child verified data
+              verified_at: child.verified_at,     // Pass child verified data
             });
           }
 
@@ -434,7 +438,6 @@ const getReportByRequestId = async (req, res) => {
               ref_range: range.ref_text,
               flag,
               note: '',
-              // No need for verified_name/at here as it's included in the top-level item 'r'
             },
           ],
         });
@@ -449,8 +452,8 @@ const getReportByRequestId = async (req, res) => {
       // Pass the latest verified and reviewed data for the report stamp
       last_verified_by: lastVerification.verified_name,
       last_verified_at: lastVerification.verified_at,
-      last_reviewed_by: lastReview.reviewed_by_name,  // 💡 ADDED
-      last_reviewed_at: lastReview.reviewed_at,      // 💡 ADDED
+      last_reviewed_by: lastReview.reviewed_by_name,   // 💡 ADDED
+      last_reviewed_at: lastReview.reviewed_at,     // 💡 ADDED
       items,
     };
 

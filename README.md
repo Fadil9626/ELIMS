@@ -14,3 +14,6 @@ docker compose up -d --build
  | Email                                         | Password | Role        |
 | --------------------------------------------- | -------- | ----------- |
 | [admin@elims.local](mailto:admin@elims.local) | admin123 | Super Admin |
+
+# to install the chemistry tests
+docker exec -it elims_api npm run seed:chemistry

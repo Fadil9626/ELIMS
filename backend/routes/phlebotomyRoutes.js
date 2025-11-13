@@ -2,46 +2,46 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/authMiddleware');
 const {
-  getSummary,
-  getWorklist,
-  markSampleAsCollected,
-  exportCollectedSamples,
+  getSummary,
+  getWorklist,
+  markSampleAsCollected,
+  exportCollectedSamples,
 } = require('../controllers/phlebotomyController');
 
-/**
- * ==========================================================
- * @route   GET /api/phlebotomy/summary
- * @desc    Fetch overall phlebotomy summary stats
- * @access  Private (Role/Permission-based)
- * ==========================================================
- */
-router.get('/summary', protect, authorize('phlebotomy', 'view'), getSummary);
+// ----------------------------------------------------------
+// Core Phlebotomy Routes
+// ----------------------------------------------------------
 
-/**
- * ==========================================================
- * @route   GET /api/phlebotomy/worklist
- * @desc    Get all pending/collected samples (with filters)
- * @access  Private (Role/Permission-based)
- * ==========================================================
- */
-router.get('/worklist', protect, authorize('phlebotomy', 'view'), getWorklist);
+/** GET /summary: Fetch overall phlebotomy summary stats */
+router.get(
+    '/summary', 
+    protect, 
+    authorize('phlebotomy', 'view'), 
+    getSummary
+);
 
-/**
- * ==========================================================
- * @route   PUT /api/phlebotomy/collect/:id
- * @desc    Mark a sample as collected
- * @access  Private (Role/Permission-based)
- * ==========================================================
- */
-router.put('/collect/:id', protect, authorize('phlebotomy', 'update'), markSampleAsCollected);
+/** GET /worklist: Get all pending/collected samples (with filters) */
+router.get(
+    '/worklist', 
+    protect, 
+    authorize('phlebotomy', 'view'), 
+    getWorklist
+);
 
-/**
- * ==========================================================
- * @route   GET /api/phlebotomy/export
- * @desc    Export collected samples to CSV file
- * @access  Private (Role/Permission-based)
- * ==========================================================
- */
-router.get('/export', protect, authorize('phlebotomy', 'export'), exportCollectedSamples);
+/** PUT /collect/:id: Mark a sample as collected */
+router.put(
+    '/collect/:id', 
+    protect, 
+    authorize('phlebotomy', 'update'), 
+    markSampleAsCollected
+);
+
+/** GET /export: Export collected samples to CSV file */
+router.get(
+    '/export', 
+    protect, 
+    authorize('phlebotomy', 'export'), 
+    exportCollectedSamples
+);
 
 module.exports = router;

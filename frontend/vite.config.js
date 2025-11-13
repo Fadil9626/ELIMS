@@ -9,15 +9,13 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     open: false,
-    // We are running on http, not https
-    https: false, // <-- ✅ ADD THIS to fix the SSL error from before
+    https: false, 
 
     proxy: {
       "/api": {
-        // ❌ WRONG: 'api' is not a hostname on your computer
-        // target: "http://api:5000", 
-        
-        // ✅ CORRECT: Point to the port exposed on localhost
+        // ✅ **FIX**: This line is now active.
+        // It tells Vite to send all '/api/...' requests
+        // to your backend server running on port 5000.
         target: "http://localhost:5000", 
         
         changeOrigin: true,
@@ -30,7 +28,6 @@ export default defineConfig({
       },
     },
   },
-  // ... rest of your file
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

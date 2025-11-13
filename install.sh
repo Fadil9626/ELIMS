@@ -1,48 +1,55 @@
 #!/bin/bash
-set -e
 
-echo "============================================"
-echo " 🚀 ELIMS Deployment Starting"
-echo "============================================"
+echo "========================================="
+echo "      🚀 Installing ELIMS v1.0.1"
+echo "   With FULL database auto-restore"
+echo "========================================="
 
-# Check docker
-if ! command -v docker >/dev/null 2>&1; then
-  echo "❌ Docker is not installed. Please install Docker first."
-  exit 1
+# -----------------------------
+# 1. STOP OLD CONTAINERS
+# -----------------------------
+echo "🛑 Stopping any running ELIMS containers..."
+docker compose down --remove-orphans
+
+# -----------------------------
+# 2. REBUILD SYSTEM
+# -----------------------------
+echo "🔧 Building fresh containers..."
+docker compose build
+
+echo "🚀 Starting database first..."
+docker compose up -d db
+
+echo "⏳ Waiting for PostgreSQL to become healthy..."
+sleep 10
+
+# -----------------------------
+# 3. RESTORE DATABASE
+# -----------------------------
+BACKUP_FILE="./elims_backup.sql"
+
+if [ ! -f "$BACKUP_FILE" ]; then
+    echo "❌ Backup file NOT FOUND: $BACKUP_FILE"
+    exit 1
 fi
 
-# Check docker compose
-if ! command -v docker compose >/dev/null 2>&1; then
-  echo "❌ Docker Compose is not installed. Please install Docker Compose plugin."
-  exit 1
-fi
+echo "📁 Copying backup into database container..."
+docker cp "$BACKUP_FILE" elims_db:/elims_backup.sql
 
-# Copy .env.example → .env if not exists
-if [ ! -f .env ]; then
-  echo "📄 Creating .env from template..."
-  cp .env.example .env
-fi
+echo "🗄️ Restoring database..."
+docker exec -i elims_db sh -c "
+    psql -U \$POSTGRES_USER -d \$POSTGRES_DB < /elims_backup.sql
+"
 
-echo ""
-echo "============================================"
-echo " ⚙️  Using configuration:"
-echo "  - FRONTEND_HOST: $(grep FRONTEND_HOST .env | cut -d '=' -f2)"
-echo "  - API_HOST: $(grep API_HOST .env | cut -d '=' -f2)"
-echo "  - POSTGRES_PASSWORD: (hidden)"
-echo "============================================"
-echo ""
+echo "✅ Database restore complete!"
 
-echo "🐳 Starting Docker services..."
-docker compose up -d --build
+# -----------------------------
+# 4. START API + FRONTEND
+# -----------------------------
+echo "🚀 Starting API and frontend..."
+docker compose up -d api web
 
-echo ""
-echo "============================================"
-echo " ✅ Deployment Complete!"
-echo "--------------------------------------------"
-echo " 🌐 Visit your ELIMS frontend at: https://your-domain"
-echo " 🔌 API available at: https://api.your-domain"
-echo "--------------------------------------------"
-echo " Default Login:"
-echo "   Username: admin"
-echo "   Password: admin123"
-echo "============================================"
+echo "========================================="
+echo "🎉 ELIMS Installed Successfully!"
+echo "➡️ Login: http://your-server-ip:8081"
+echo "========================================="

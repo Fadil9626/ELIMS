@@ -1,210 +1,268 @@
-// frontend/src/pages/admin/StaffManagementPage.jsx
 import React, { useState, useEffect } from "react";
 import userService from "../../services/userService";
 import rolesService from "../../services/rolesService";
+import departmentService from "../../services/departmentService";
 import AddEditStaffModal from "../../components/admin/AddEditStaffModal";
 import ConfirmModal from "../../components/layout/ConfirmModal";
-import { HiPencil, HiTrash, HiUserGroup, HiPlus } from "react-icons/hi";
+import { HiPencil, HiTrash, HiPlus } from "react-icons/hi";
+
+// ============================================================
+// HELPER COMPONENT
+// ============================================================
 
 const RoleBadge = ({ name, core }) => (
-  <span
-    className={`inline-flex items-center gap-1 rounded-full text-[11px] px-2 py-0.5 ring-1 ${
-      core
-        ? "bg-slate-100 text-slate-700 ring-slate-200"
-        : "bg-emerald-50 text-emerald-700 ring-emerald-200"
-    }`}
-  >
-    {name}
-  </span>
+  <span
+    className={`inline-flex items-center gap-1 rounded-full text-[11px] px-2 py-0.5 ring-1 ${
+      core
+        ? "bg-slate-100 text-slate-700 ring-slate-200"
+        : "bg-emerald-50 text-emerald-700 ring-emerald-200"
+    }`}
+  >
+    {name}
+  </span>
 );
 
+// ============================================================
+// MAIN PAGE COMPONENT
+// ============================================================
+
 export default function StaffManagementPage() {
-  const [staff, setStaff] = useState([]);
-  const [roles, setRoles] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [staff, setStaff] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [editingUser, setEditingUser] = useState(null);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [userToDelete, setUserToDelete] = useState(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState(null);
 
-  const token = JSON.parse(localStorage.getItem("userInfo"))?.token || null;
+  const token = JSON.parse(localStorage.getItem("userInfo"))?.token || null;
 
-  const fetchStaff = async () => {
-    setLoading(true);
-    try {
-      const data = await userService.getAllUsers(token);
-      setStaff(Array.isArray(data) ? data : []);
-    } catch (err) {
-      setError(err.message || "Failed to load staff");
-    } finally {
-      setLoading(false);
-    }
-  };
+  // --- Data Fetching ---
 
-  const fetchRoles = async () => {
-    try {
-      const list = await rolesService.listRoles(token);
-      setRoles(Array.isArray(list) ? list : []);
-    } catch (e) {
-      console.error("Failed to load roles", e);
-    }
-  };
+  const fetchStaff = async () => {
+    setLoading(true);
+    try {
+      // NOTE: userService.getAllUsers should now return user objects with department_id/department_name
+      const data = await userService.getAllUsers(token);
+      setStaff(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setError(err.message || "Failed to load staff");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  useEffect(() => {
-    fetchStaff();
-    fetchRoles();
-  }, []);
+  const fetchRoles = async () => {
+    try {
+      const list = await rolesService.listRoles(token);
+      setRoles(Array.isArray(list) ? list : []);
+    } catch (e) {
+      console.error("Failed to load roles", e);
+    }
+  };
 
-  const handleOpenModal = (user = null) => {
-    setEditingUser(user);
-    setIsEditModalOpen(true);
-  };
+  const fetchDepartments = async () => {
+    try {
+      const list = await departmentService.getAllDepartments(token);
+      setDepartments(Array.isArray(list) ? list : []);
+    } catch (e) {
+      console.error("Failed to load departments", e);
+    }
+  };
 
-  const handleCloseModal = () => {
-    setEditingUser(null);
-    setIsEditModalOpen(false);
-  };
+  useEffect(() => {
+    // Fetch all data in parallel for speed
+    Promise.all([
+      fetchStaff(),
+      fetchRoles(),
+      fetchDepartments()
+    ]);
+  }, [token]); 
 
-  const handleSaveUser = async (formData, userId) => {
-    try {
-      if (userId) {
-        await userService.updateUser(userId, formData, token);
-      } else {
-        await userService.createUser(formData, token);
-      }
-      handleCloseModal();
-      fetchStaff();
-    } catch (err) {
-      alert(`Failed to save staff: ${err.message}`);
-    }
-  };
+  // --- Modal Handlers ---
 
-  const handleDeleteClick = (user) => {
-    setUserToDelete(user);
-    setIsDeleteModalOpen(true);
-  };
+  const handleOpenModal = (user = null) => {
+    setEditingUser(user);
+    setIsEditModalOpen(true);
+  };
 
-  const handleConfirmDelete = async () => {
-    if (!userToDelete) return;
-    try {
-      await userService.deleteUser(userToDelete.id, token);
-      fetchStaff();
-    } catch {
-      alert("Failed to delete user.");
-    } finally {
-      setIsDeleteModalOpen(false);
-      setUserToDelete(null);
-    }
-  };
+  const handleCloseModal = () => {
+    setEditingUser(null);
+    setIsEditModalOpen(false);
+  };
 
-  if (loading)
-    return <div className="text-gray-600 text-sm p-4">Loading staff...</div>;
-  if (error)
-    return <div className="text-red-500 text-sm p-4">⚠ {error}</div>;
+  const handleSaveUser = async (formData, userId) => {
+    try {
+      if (userId) {
+        await userService.updateUser(userId, formData, token);
+      } else {
+        await userService.createUser(formData, token);
+      }
+      handleCloseModal();
+      fetchStaff(); // Re-fetch staff after save
+    } catch (err) {
+      alert(`Failed to save staff: ${err.message}`);
+    }
+  };
 
-  return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex justify-between items-center bg-gradient-to-r from-indigo-50 via-white to-rose-50 ring-1 ring-gray-200 rounded-2xl p-4">
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900">
-            Staff Management
-          </h2>
-          <p className="text-sm text-gray-600">
-            Manage user accounts, assign roles, and control access.
-          </p>
-        </div>
-        <button
-          onClick={() => handleOpenModal()}
-          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 text-white px-4 py-2 hover:bg-indigo-700"
-        >
-          <HiPlus className="h-5 w-5" /> Add Staff
-        </button>
-      </div>
+  const handleDeleteClick = (user) => {
+    setUserToDelete(user);
+    setIsDeleteModalOpen(true);
+  };
 
-      {/* Table */}
-      <div className="bg-white rounded-2xl shadow-sm ring-1 ring-gray-200 p-4 overflow-x-auto">
-        <table className="min-w-full text-left text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="p-3">Name</th>
-              <th className="p-3">Email</th>
-              <th className="p-3">Roles</th>
-              <th className="p-3 text-center">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {staff.map((user) => (
-              <tr
-                key={user.id}
-                className="border-b last:border-0 hover:bg-gray-50 transition"
-              >
-                <td className="p-3">{user.full_name}</td>
-                <td className="p-3">{user.email}</td>
-                <td className="p-3">
-                  {Array.isArray(user.roles) && user.roles.length > 0 ? (
-                    <div className="flex flex-wrap gap-1">
-                      {user.roles.map((r) => (
-                        <RoleBadge key={r.id} name={r.name} core={r.id <= 6} />
-                      ))}
-                    </div>
-                  ) : (
-                    <span className="text-gray-500 text-xs italic">
-                      {user.role_name || "No roles assigned"}
-                    </span>
-                  )}
-                </td>
-                <td className="p-3 text-center flex gap-2 justify-center">
-                  <button
-                    onClick={() => handleOpenModal(user)}
-                    className="p-2 text-gray-500 hover:text-indigo-600"
-                    title="Edit User"
-                  >
-                    <HiPencil />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteClick(user)}
-                    className="p-2 text-gray-500 hover:text-rose-600"
-                    title="Delete User"
-                  >
-                    <HiTrash />
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {!staff.length && (
-              <tr>
-                <td
-                  colSpan={4}
-                  className="text-center text-gray-500 text-sm py-6"
-                >
-                  No staff found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+  const handleConfirmDelete = async () => {
+    if (!userToDelete) return;
+    try {
+      await userService.deleteUser(userToDelete.id, token);
+      fetchStaff(); // Re-fetch staff after delete
+    } catch {
+      alert("Failed to delete user.");
+    } finally {
+      setIsDeleteModalOpen(false);
+      setUserToDelete(null);
+    }
+  };
 
-      {/* Modals */}
-      <AddEditStaffModal
-        isOpen={isEditModalOpen}
-        onClose={handleCloseModal}
-        onSave={handleSaveUser}
-        userData={editingUser}
-        availableRoles={roles}
-      />
+  // --- Render Logic ---
 
-      <ConfirmModal
-        isOpen={isDeleteModalOpen}
-        title={`Delete User: ${userToDelete?.full_name}`}
-        message="Are you sure you want to delete this user? This action cannot be undone."
-        onConfirm={handleConfirmDelete}
-        onCancel={() => setIsDeleteModalOpen(false)}
-        confirmText="Delete"
-      />
-    </div>
-  );
+  // 1. Create a quick lookup map for department IDs to Names
+  const departmentMap = departments.reduce((map, dept) => {
+    // Store key as string to match potential string IDs from user object
+    map[String(dept.id)] = dept.name; 
+    return map;
+  }, {});
+
+
+  if (loading)
+    return <div className="text-gray-600 text-sm p-4">Loading staff...</div>;
+  if (error)
+    return <div className="text-red-500 text-sm p-4">⚠ {error}</div>;
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex justify-between items-center bg-gradient-to-r from-indigo-50 via-white to-rose-50 ring-1 ring-gray-200 rounded-2xl p-4">
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900">
+            Staff Management
+          </h2>
+          <p className="text-sm text-gray-600">
+            Manage user accounts, assign roles, and control access.
+          </p>
+        </div>
+        <button
+          onClick={() => handleOpenModal()}
+          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 text-white px-4 py-2 hover:bg-indigo-700"
+        >
+          <HiPlus className="h-5 w-5" /> Add Staff
+        </button>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white rounded-2xl shadow-sm ring-1 ring-gray-200 p-4 overflow-x-auto">
+        <table className="min-w-full text-left text-sm">
+          <thead className="bg-gray-100">
+            <tr>
+              <th className="p-3">Name</th>
+              <th className="p-3">Email</th>
+              <th className="p-3">Roles</th>
+              <th className="p-3">Department</th> 
+              <th className="p-3 text-center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {staff.map((user) => {
+                
+                // 2. Aggressively identify the department ID from common properties
+                // This checks user.department_id, user.dept_id, user.departmentId, and user.department.id
+                const userDeptId = user.department_id || user.dept_id || user.departmentId || user.department?.id;
+                
+                // 3. Determine the final department name using the lookup map
+                const finalDeptName = (user.department_name && user.department_name !== 'N/A')
+                    ? user.department_name 
+                    // Lookup using the extracted ID (forcing it to a string for lookup)
+                    : departmentMap[String(userDeptId)] || 'N/A'; 
+
+                return (
+                <tr
+                  key={user.id}
+                  className="border-b last:border-0 hover:bg-gray-50 transition"
+                >
+                  <td className="p-3">{user.full_name}</td>
+                  <td className="p-3">{user.email}</td>
+                  <td className="p-3">
+                    {Array.isArray(user.roles) && user.roles.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {user.roles.map((r) => (
+                          <RoleBadge key={r.id || r.name} name={r.name} core={r.id <= 6} /> 
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-gray-500 text-xs italic">
+                        {user.role_name || "No roles assigned"}
+                      </span>
+                    )}
+                  </td>
+
+                  {/* DEPARTMENT DATA CELL */}
+                  <td className="p-3">
+                    {finalDeptName}
+                  </td>
+
+                  <td className="p-3 text-center flex gap-2 justify-center">
+                    <button
+                      onClick={() => handleOpenModal(user)}
+                      className="p-2 text-gray-500 hover:text-indigo-600"
+                      title="Edit User"
+                    >
+                      <HiPencil />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteClick(user)}
+                      className="p-2 text-gray-500 hover:text-rose-600"
+                      title="Delete User"
+                    >
+                      <HiTrash />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+            {!staff.length && (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="text-center text-gray-500 text-sm py-6"
+                >
+                  No staff found.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modals */}
+      <AddEditStaffModal
+        isOpen={isEditModalOpen}
+        onClose={handleCloseModal}
+        onSave={handleSaveUser}
+        userData={editingUser}
+        availableRoles={roles}
+        availableDepartments={departments}
+      />
+
+      <ConfirmModal
+        isOpen={isDeleteModalOpen}
+        title={`Delete User: ${userToDelete?.full_name}`}
+        message="Are you sure you want to delete this user? This action cannot be undone."
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setIsDeleteModalOpen(false)}
+        confirmText="Delete"
+      />
+    </div>
+  );
 }
