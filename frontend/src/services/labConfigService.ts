@@ -1,5 +1,5 @@
 // ============================================================================
-// 🧪 LAB CONFIG SERVICE (Final Production Version)
+// 🧪 LAB CONFIG SERVICE (Final Compatible Version)
 // ============================================================================
 
 // -----------------------------
@@ -125,17 +125,17 @@ const getPanels = async (token?: string): Promise<Panel[]> =>
 const createPanel = async (data: Partial<Panel>, token?: string) =>
   apiCall(PANEL_API_URL, "POST", token, data);
 
-const updateTestPanel = async (id: number, data: Partial<Panel>, token?: string) =>
+const updatePanel = async (id: number, data: Partial<Panel>, token?: string) =>
   apiCall(`${PANEL_API_URL}/${id}`, "PUT", token, data);
 
-/// 🔥 REQUIRED FIX — alias for frontend
-const updatePanel = updateTestPanel;
-
-const deleteTestPanel = async (id: number, token?: string) =>
+const deletePanel = async (id: number, token?: string) =>
   apiCall(`${PANEL_API_URL}/${id}`, "DELETE", token);
 
-/// 🔥 REQUIRED FIX — alias for frontend
-const deletePanel = deleteTestPanel;
+// --- Compatibility alias for older frontend components ---
+const getTestPanels = getPanels;
+const updateTestPanel = updatePanel;
+const deleteTestPanel = deletePanel;
+const createTestPanel = createPanel;
 
 // ============================================================================
 // 🧬 ANALYTES / TESTS
@@ -145,6 +145,11 @@ const getAnalytes = async (token?: string): Promise<TestAnalyte[]> =>
 
 const getAllTests = async (token?: string): Promise<TestAnalyte[]> =>
   apiCall<TestAnalyte[]>(`${ANALYTE_API_URL}/all`, "GET", token);
+
+// --- Legacy aliases for UI compatibility ---
+const getAllCatalogTests = getAllTests;
+const updateTest = (id: number, data: Partial<TestAnalyte>, token?: string) =>
+  apiCall(`${ANALYTE_API_URL}/${id}`, "PUT", token, data);
 
 const createAnalyte = async (data: Partial<TestAnalyte>, token?: string) =>
   apiCall(ANALYTE_API_URL, "POST", token, data);
@@ -209,9 +214,9 @@ const deleteNormalRange = async (rangeId: number, token?: string) =>
 const labConfigService = {
   // Panels
   getPanels,
-  getTestPanels: getPanels,
+  getTestPanels,
   createPanel,
-  createTestPanel: createPanel,
+  createTestPanel,
   updatePanel,
   updateTestPanel,
   deletePanel,
@@ -220,8 +225,10 @@ const labConfigService = {
   // Tests / Analytes
   getAnalytes,
   getAllTests,
+  getAllCatalogTests,
   createAnalyte,
   updateAnalyte,
+  updateTest, // ⭐ Compatibility fix
   deleteAnalyte,
 
   // Panel–Analyte Links

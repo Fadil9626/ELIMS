@@ -1,18 +1,23 @@
 // frontend/src/context/AuthContext.jsx
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { io } from "socket.io-client";
 
 const AuthContext = createContext(null);
 const STORAGE_KEY = "elims_auth_v1";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [socket, setSocket] = useState(null);
 
+  // Restore session on refresh
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
+
       const parsed = JSON.parse(raw);
       if (parsed?.token && parsed?.user) {
         setToken(parsed.token);
@@ -26,6 +31,28 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
+  // 🔌 Create Socket.IO connection when user/token is available
+  useEffect(() => {
+    if (!token) return;
+
+    const newSocket = io(API_URL, {
+      auth: { token },
+      transports: ["websocket"],
+    });
+
+    setSocket(newSocket);
+
+    newSocket.on("connect", () =>
+      console.log("🔌 Socket connected:", newSocket.id)
+    );
+
+    newSocket.on("disconnect", () =>
+      console.log("❌ Socket disconnected")
+    );
+
+    return () => newSocket.disconnect();
+  }, [token]);
+
   const login = async ({ email, password }) => {
     setAuthLoading(true);
     try {
@@ -34,6 +61,7 @@ export const AuthProvider = ({ children }) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
+
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || "Invalid credentials");
 
@@ -49,6 +77,7 @@ export const AuthProvider = ({ children }) => {
 
       setUser(normalizedUser);
       setToken(data.token);
+
       localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({ token: data.token, user: normalizedUser })
@@ -64,6 +93,11 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
     setToken(null);
     localStorage.removeItem(STORAGE_KEY);
+
+    if (socket) {
+      socket.disconnect();
+      setSocket(null);
+    }
   };
 
   // Permission helper
@@ -73,7 +107,6 @@ export const AuthProvider = ({ children }) => {
     const roleName = (user.role_name || "").toLowerCase();
     const roleSlug = (user.role_slug || "").toLowerCase();
 
-    // Super Admin bypass
     if (roleName === "super admin" || roleSlug === "super_admin") return true;
     if (user.permission_slugs?.includes("*:*")) return true;
 
@@ -99,7 +132,18 @@ export const AuthProvider = ({ children }) => {
     });
 
   return (
-    <AuthContext.Provider value={{ user, token, authLoading, login, logout, can, authedFetch }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        authLoading,
+        login,
+        logout,
+        can,
+        authedFetch,
+        socket, // ⬅️ Export socket
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

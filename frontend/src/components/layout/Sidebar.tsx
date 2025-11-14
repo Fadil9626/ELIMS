@@ -1,3 +1,4 @@
+// frontend/src/components/layout/Sidebar.jsx
 import React, { useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
@@ -18,6 +19,7 @@ import {
   HiX,
 } from "react-icons/hi";
 import { RiLogoutBoxLine } from "react-icons/ri";
+import { HiPaperAirplane } from "react-icons/hi2";
 import { useAuth } from "../../context/AuthContext";
 
 const SidebarLink = ({ to, icon: Icon, children, isExpanded, onClick }) => (
@@ -41,7 +43,7 @@ const SidebarLink = ({ to, icon: Icon, children, isExpanded, onClick }) => (
 );
 
 const Sidebar = ({ isExpanded, toggleSidebar }) => {
-  const { user, logout, can } = useAuth(); // 'can' comes from your AuthContext
+  const { user, logout, can } = useAuth();
 
   const [patientOpen, setPatientOpen] = useState(false);
   const [pathologyOpen, setPathologyOpen] = useState(false);
@@ -95,7 +97,8 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
         {/* Navigation */}
         <nav className="flex-grow overflow-y-auto p-3 space-y-1 custom-scrollbar">
           <ul className="space-y-1">
-            
+
+            {/* Dashboard */}
             <SidebarLink
               to="/admin/dashboard"
               icon={HiOutlineViewGrid}
@@ -105,8 +108,17 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
               Dashboard
             </SidebarLink>
 
+            {/* 📩 Messaging */}
+            <SidebarLink
+              to="/messages"
+              icon={HiPaperAirplane}
+              isExpanded={isExpanded}
+              onClick={handleNavClick}
+            >
+              Messages
+            </SidebarLink>
 
-            {/* ✅ **FIX**: Using capitalized resource name "Patients" */}
+            {/* Patients */}
             {can("Patients", "View") && (
               <li>
                 <button
@@ -123,26 +135,24 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
                     <SidebarLink to="/patients" icon={HiOutlineUsers} isExpanded onClick={handleNavClick}>
                       Patient List
                     </SidebarLink>
-
-                    {/* ✅ **FIX**: Using capitalized resource name "Tests" */}
-                    {can("Tests", "View") && (
-                      <SidebarLink to="/tests/management" icon={HiOutlineBeaker} isExpanded onClick={handleNavClick}>
-                        Test Management
-                      </SidebarLink>
-                    )}
                   </ul>
                 )}
               </li>
             )}
 
-            {/* ✅ **FIX**: Using capitalized resource name "Phlebotomy" */}
+            {/* Phlebotomy */}
             {can("Phlebotomy", "View") && (
-              <SidebarLink to="/phlebotomy/worklist" icon={HiOutlineClipboardCheck} isExpanded={isExpanded} onClick={handleNavClick}>
+              <SidebarLink
+                to="/phlebotomy/worklist"
+                icon={HiOutlineClipboardCheck}
+                isExpanded={isExpanded}
+                onClick={handleNavClick}
+              >
                 Phlebotomy Worklist
               </SidebarLink>
             )}
 
-            {/* ✅ **FIX**: Using capitalized resource names */}
+            {/* Pathology */}
             {(can("Results", "Verify") || can("Results", "Enter")) && (
               <li>
                 <button
@@ -167,28 +177,28 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
               </li>
             )}
 
-            {/* ✅ **FIX**: Using capitalized resource name "Reports" */}
+            {/* Reports */}
             {can("Reports", "View") && (
               <SidebarLink to="/reports" icon={HiOutlineDocumentReport} isExpanded={isExpanded} onClick={handleNavClick}>
                 Reports
               </SidebarLink>
             )}
 
-            {/* ✅ **FIX**: Using capitalized resource name "Inventory" */}
+            {/* Inventory */}
             {can("Inventory", "View") && (
               <SidebarLink to="/inventory" icon={HiOutlineArchive} isExpanded={isExpanded} onClick={handleNavClick}>
                 Inventory
               </SidebarLink>
             )}
 
-            {/* ✅ **FIX**: Using capitalized resource name "Users" */}
-            {can("Users", "View") && ( 
+            {/* Staff */}
+            {can("Users", "View") && (
               <SidebarLink to="/admin/staff" icon={HiOutlineBriefcase} isExpanded={isExpanded} onClick={handleNavClick}>
                 Staff Management
               </SidebarLink>
             )}
 
-            {/* ✅ **FIX**: Using capitalized resource name "Settings" */}
+            {/* System Settings */}
             {can("Settings", "View") && (
               <li>
                 <button
@@ -205,6 +215,7 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
                     <SidebarLink to="/admin/settings" icon={HiOutlineCog} isExpanded onClick={handleNavClick}>
                       General Settings
                     </SidebarLink>
+
                     <li>
                       <button
                         onClick={() => setLabOpen((p) => !p)}

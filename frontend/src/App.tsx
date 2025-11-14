@@ -1,15 +1,15 @@
+// frontend/src/App.tsx
 import React, { useContext } from "react";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import "./assets/styles/index.css";
 
-// ============================================================
-// PAGE IMPORTS
-// ============================================================
+// ======================== PAGES ========================
 import LoginPage from "./pages/auth/LoginPage";
 import UnauthorizedPage from "./pages/auth/UnauthorizedPage";
 import MaintenancePage from "./pages/MaintenancePage";
 
 import DashboardRouter from "./pages/dashboard/DashboardRouter";
+import MessagesPage from "./pages/messages/MessagesPage";
 
 import PatientDirectoryPage from "./pages/patients/PatientDirectoryPage";
 import PatientRegistrationPage from "./pages/patients/PatientRegistrationPage";
@@ -31,43 +31,43 @@ import InventoryPage from "./pages/inventory/InventoryPage";
 import SettingsPage from "./pages/admin/SettingsPage";
 import LabConfigDashboard from "./pages/admin/LabConfigDashboard";
 import TestCatalogManager from "./pages/admin/TestCatalogManager";
-import StaffManagementPage from "./pages/admin/StaffManagementPage"; 
+import StaffManagementPage from "./pages/admin/StaffManagementPage";
 
 import AllReportsPage from "./pages/reports/AllReportsPage";
 import TestReportPage from "./pages/reports/ReportPage";
+import InvoicePage from "./pages/invoices/InvoicePage"; // 👈 CORRECTED IMPORT NAME
 
 import ProfilePage from "./pages/profile/ProfilePage";
 
-// ============================================================
-// LAYOUT / CONTEXT
-// ============================================================
+// ======================== LAYOUT ========================
 import Sidebar from "./components/layout/Sidebar";
 import DashboardHeader from "./components/layout/DashboardHeader";
 import ProtectedRoute from "./components/ProtectedRoute";
 import RequirePermission from "./components/auth/RequirePermission";
+
+// ======================== CONTEXTS ========================
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { SettingsProvider, SettingsContext } from "./context/SettingsContext";
 import { SocketProvider } from "./context/SocketContext";
 import { Toaster } from "react-hot-toast";
 
-// Assuming a basic structure for User type (replace with your actual type if known)
+// ======================== TYPES ========================
 interface User {
-  full_name?: string;
-  email?: string;
-  profile_image_url?: string;
-  role_id?: number;
+  full_name?: string;
+  email?: string;
+  profile_image_url?: string;
+  role_id?: number;
 }
 
-// ============================================================
-// MAIN LAYOUT
-// ============================================================
+
+// ======================== APP LAYOUT ========================
 const AppLayout: React.FC = () => {
   const location = useLocation();
-  const { user } = useAuth() as { user: User | null }; // Type casting for better handling
+  const { user } = useAuth() as { user: User | null };
   const [isSidebarExpanded, setIsSidebarExpanded] = React.useState(true);
 
   const isLoginPage = location.pathname === "/login";
-  const mainContentMargin = isSidebarExpanded ? "md:ml-64" : "md:ml-20";
+  const marginClass = isSidebarExpanded ? "md:ml-64" : "md:ml-20";
 
   return (
     <div className={!isLoginPage ? "flex min-h-screen" : "min-h-screen"}>
@@ -81,7 +81,7 @@ const AppLayout: React.FC = () => {
       <main
         className={
           !isLoginPage
-            ? `flex-grow bg-gray-50 transition-all duration-300 ${mainContentMargin}`
+            ? `flex-grow bg-gray-50 transition-all duration-300 ${marginClass}`
             : "flex-grow"
         }
       >
@@ -95,11 +95,11 @@ const AppLayout: React.FC = () => {
         <div className={!isLoginPage ? "p-6" : ""}>
           <Routes>
 
-            {/* Public Routes */}
+            {/* Public */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
-            {/* Dashboard Routes */}
+            {/* Dashboard */}
             <Route
               path="/"
               element={
@@ -108,11 +108,22 @@ const AppLayout: React.FC = () => {
                 </ProtectedRoute>
               }
             />
+
             <Route
               path="/admin/dashboard"
               element={
                 <ProtectedRoute>
                   <DashboardRouter />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Messaging */}
+            <Route
+              path="/messages"
+              element={
+                <ProtectedRoute>
+                  <MessagesPage />
                 </ProtectedRoute>
               }
             />
@@ -174,9 +185,7 @@ const AppLayout: React.FC = () => {
               path="/tests/management"
               element={
                 <ProtectedRoute>
-                  <RequirePermission module="tests" action="view">
-                    <TestManagementPage />
-                  </RequirePermission>
+                  <TestManagementPage />
                 </ProtectedRoute>
               }
             />
@@ -184,14 +193,12 @@ const AppLayout: React.FC = () => {
               path="/tests/requests/:id"
               element={
                 <ProtectedRoute>
-                  <RequirePermission module="tests" action="view">
-                    <TestRequestDetailPage />
-                  </RequirePermission>
+                  <TestRequestDetailPage />
                 </ProtectedRoute>
               }
             />
 
-            {/* Pathologist */}
+            {/* Pathology */}
             <Route
               path="/pathologist/worklist"
               element={
@@ -246,15 +253,13 @@ const AppLayout: React.FC = () => {
             />
 
             {/* Admin */}
-            <Route 
-                path="/admin/staff"
-                element={
-                    <ProtectedRoute>
-                        <RequirePermission module="users" action="view">
-                            <StaffManagementPage />
-                        </RequirePermission>
-                    </ProtectedRoute>
-                }
+            <Route
+              path="/admin/staff"
+              element={
+                <ProtectedRoute>
+                  <StaffManagementPage />
+                </ProtectedRoute>
+              }
             />
             <Route
               path="/admin/settings"
@@ -298,6 +303,16 @@ const AppLayout: React.FC = () => {
                 </ProtectedRoute>
               }
             />
+            
+            {/* ✅ FIX: Redirect old invoice URL to dedicated Invoice Page */}
+            <Route 
+              path="/invoices/test-request/:id"
+              element={
+                <ProtectedRoute>
+                  <InvoicePage /> {/* 👈 Using the existing InvoicePage component */}
+                </ProtectedRoute>
+              }
+            />
 
             {/* Profile */}
             <Route
@@ -308,7 +323,6 @@ const AppLayout: React.FC = () => {
                 </ProtectedRoute>
               }
             />
-
           </Routes>
         </div>
       </main>
@@ -316,9 +330,8 @@ const AppLayout: React.FC = () => {
   );
 };
 
-// ============================================================
-// MAINTENANCE MODE
-// ============================================================
+
+// ======================== MAINTENANCE HANDLING ========================
 const MaintenanceWrapper: React.FC = () => {
   const { settings, loading } = useContext(SettingsContext);
   const location = useLocation();
@@ -326,14 +339,14 @@ const MaintenanceWrapper: React.FC = () => {
 
   if (loading) return <div className="flex justify-center items-center h-screen">Loading...</div>;
   if (location.pathname === "/login") return <AppLayout />;
-  // Assuming role_id > 2 is non-admin/non-super-admin
-  if (settings?.maintenance_mode === "true" && (user?.role_id ?? 0) > 2) return <MaintenancePage />;
+  if (settings?.maintenance_mode === "true" && (user?.role_id ?? 0) > 2)
+    return <MaintenancePage />;
+
   return <AppLayout />;
 };
 
-// ============================================================
-// APP ENTRY
-// ============================================================
+
+// ======================== ENTRY ========================
 const App: React.FC = () => (
   <BrowserRouter>
     <AuthProvider>
