@@ -2,8 +2,15 @@
 set -e
 
 echo "============================================"
-echo " 🚀 ELIMS Automatic Installer"
+echo " 🚀 ELIMS Automatic Installer (Smart Mode)"
 echo "============================================"
+
+# Detect sudo permissions
+if [ "$EUID" -ne 0 ]; then
+  SUDO="sudo"
+else
+  SUDO=""
+fi
 
 # ------------------------------
 # Detect Linux Distribution
@@ -18,6 +25,7 @@ fi
 
 echo "🧩 Detected OS: $DISTRO"
 
+
 # ------------------------------
 # Install Docker if missing
 # ------------------------------
@@ -26,27 +34,28 @@ if ! command -v docker >/dev/null 2>&1; then
 
   case $DISTRO in
     ubuntu|debian)
-      apt-get update
-      apt-get install -y ca-certificates curl gnupg lsb-release
+      $SUDO apt-get update -y
+      $SUDO apt-get install -y ca-certificates curl gnupg lsb-release
 
-      curl -fsSL https://download.docker.com/linux/$DISTRO/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker.gpg
+      curl -fsSL https://download.docker.com/linux/$DISTRO/gpg | $SUDO gpg --dearmor -o /usr/share/keyrings/docker.gpg
       echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/$DISTRO \
-      $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-      
-      apt-get update
-      apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] \
+        https://download.docker.com/linux/$DISTRO $(lsb_release -cs) stable" |
+        $SUDO tee /etc/apt/sources.list.d/docker.list >/dev/null
+
+      $SUDO apt-get update -y
+      $SUDO apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
       ;;
-    
+
     rhel|centos|fedora)
-      yum install -y yum-utils
-      yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-      yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-      systemctl enable --now docker
+      $SUDO yum install -y yum-utils
+      $SUDO yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+      $SUDO yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+      $SUDO systemctl enable --now docker
       ;;
-    
+
     *)
-      echo "❌ Unsupported Linux Distribution. Install Docker manually."
+      echo "❌ Unsupported Linux Distribution."
       exit 1
       ;;
   esac
@@ -56,10 +65,10 @@ fi
 
 
 # ------------------------------
-# Ensure Docker Compose plugin exists
+# Ensure Docker Compose exists
 # ------------------------------
 if ! command -v docker compose >/dev/null 2>&1; then
-  echo "❌ Docker Compose plugin missing. Installation failed or unsupported OS."
+  echo "❌ Docker Compose plugin missing."
   exit 1
 fi
 
@@ -76,60 +85,76 @@ fi
 
 
 # ------------------------------
-# Start ELIMS
+# Start ELIMS Services
 # ------------------------------
 echo ""
 echo "🐳 Starting ELIMS system..."
 docker compose up -d --build
 
-echo "⏳ Allowing database to initialize..."
-sleep 10
+echo "⏳ Waiting for backend to start..."
+sleep 8
 
 
 # ------------------------------
-# Detect if core seed file exists
+# Backend API Health Check
 # ------------------------------
-SEED_FILE="backups/elims_core_export_v1.sql"
+API_URL="http://localhost:5000"
 
-if [ -f "$SEED_FILE" ]; then
-    
-    DB_COUNT=$(docker exec -i elims_db psql -U postgres -d postgres -t -c "SELECT COUNT(*) FROM test_catalog;" | tr -d '[:space:]')
-
-    echo ""
-    echo "📦 A system configuration file is available:"
-    echo "   👉 $SEED_FILE"
-
-    if [ "$DB_COUNT" -gt 0 ]; then
-        echo "⚠️ WARNING: Database already contains $DB_COUNT configured tests."
-        read -p "➡️ Overwrite existing configuration? (y/n): " CONFIRM
-        if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-            echo "⏭️ Skipping import (existing data preserved)."
-            SKIP_IMPORT=true
-        fi
-    fi
-
-    if [ "$SKIP_IMPORT" != true ]; then
-        read -p "➡️ Import test catalog, analytes, ranges, roles & permissions? (y/n): " DO_IMPORT
-
-        if [[ "$DO_IMPORT" =~ ^[Yy]$ ]]; then
-            echo "📥 Importing core ELIMS configuration..."
-            docker cp "$SEED_FILE" elims_db:/tmp/elims_seed.sql
-            docker exec -i elims_db psql -U postgres -d postgres < "$SEED_FILE" || true
-            echo "✔ Core configuration imported."
-        else
-            echo "⏭️ Import skipped."
-        fi
-    fi
+echo "🔍 Checking API availability..."
+if curl -s "$API_URL/api/health" | grep -q "OK"; then
+    echo "✔ API validated at $API_URL"
 else
-    echo "⚠️ No core configuration file detected — continuing."
+    echo "⚠️ API did not respond to /api/health"
+    curl -Is "$API_URL" | head -n 1
 fi
 
 
 # ------------------------------
-# Create System Users
+# Fix frontend VITE API URL
 # ------------------------------
-echo "👥 Creating default users (Admin, Receptionist, Lab Tech, Pathologist)..."
-docker exec -i elims_db psql -U postgres -d postgres < backend/init/create-default-users.sql || true
+if [ -f frontend/.env ]; then
+  echo "🛠 Updating frontend VITE_API_URL..."
+  sed -i "s|^VITE_API_URL=.*|VITE_API_URL=$API_URL|g" frontend/.env
+  echo "✔ frontend/.env updated"
+fi
+
+
+# ------------------------------
+# Optional: Seed database
+# ------------------------------
+SEED_FILE="backups/elims_core_export_v1.sql"
+
+if [ -f "$SEED_FILE" ]; then
+    DB_COUNT=$(docker exec -i elims_db psql -U postgres -d postgres -t -c "SELECT COUNT(*) FROM test_catalog;" | tr -d '[:space:]')
+
+    echo ""
+    echo "📦 Seed file detected: $SEED_FILE"
+
+    if [ "$DB_COUNT" -gt 0 ]; then
+        echo "⚠️ Existing database contains $DB_COUNT records."
+        read -p "➡️ Overwrite existing data? (y/n): " CONFIRM
+        if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+            docker exec -i elims_db psql -U postgres -d postgres < "$SEED_FILE" || true
+            echo "✔ Seed imported."
+        else
+            echo "⏭️ Seed import skipped."
+        fi
+    else
+        docker exec -i elims_db psql -U postgres -d postgres < "$SEED_FILE" || true
+        echo "✔ Seed imported."
+    fi
+else
+    echo "⚠️ No seed file found."
+fi
+
+
+# ------------------------------
+# Create Default Users
+# ------------------------------
+if [ -f backend/init/create-default-users.sql ]; then
+  echo "👥 Creating default system users..."
+  docker exec -i elims_db psql -U postgres -d postgres < backend/init/create-default-users.sql || true
+fi
 
 
 echo ""
@@ -137,16 +162,9 @@ echo "============================================"
 echo " 🎉 INSTALLATION COMPLETE!"
 echo "--------------------------------------------"
 echo " 🌐 Frontend:  http://localhost:8081"
-echo " 🔧 API:       http://localhost:5000"
+echo " 🔧 API:       $API_URL"
 echo "--------------------------------------------"
-echo " Default Login:"
+echo " Login:"
 echo "   Email: admin@elims.local"
 echo "   Password: admin123"
-echo ""
-echo " Additional Built-In Users:"
-echo "   receptionist@elims.local"
-echo "   labtech@elims.local"
-echo "   pathologist@elims.local"
-echo "--------------------------------------------"
-echo "If installed on a server, replace 'localhost' with server IP."
 echo "============================================"
