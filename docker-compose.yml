@@ -8,6 +8,7 @@ volumes:
   elims_postgres_data:
 
 services:
+
   # ===========================================================
   # PostgreSQL Database
   # ===========================================================
@@ -16,14 +17,14 @@ services:
     container_name: elims_db
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-elims_pass}
-      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Database
+      POSTGRES_DB: postgres
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - elims_postgres_data:/var/lib/postgresql/data/pgdata
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -32,7 +33,7 @@ services:
       - elims_net
 
   # ===========================================================
-  # Node.js Backend API
+  # Node.js Backend API (FIX APPLIED HERE)
   # ===========================================================
   api:
     build:
@@ -43,19 +44,23 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: npm run dev
+    
+    # ⛔ REMOVED: env_file: - ./backend/.env
+    # This was causing the conflict.
+
+    # ✅ FIX: All values are now explicit and correct.
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 5000
-      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-prod}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-elims_pass}@db:5432/${POSTGRES_DB:-postgres}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://localhost:8081}
+      DATABASE_URL: postgresql://postgres:Database@db:5432/postgres
+      CORS_ORIGIN: http://localhost:8081,http://localhost:5173
+      # This is the correct secret from your .env file
+      JWT_SECRET: supersecretkey1234567890 
+      
     ports:
       - "5000:5000"
     volumes:
-      # ✅ Removed ./backend:/usr/src/app (was breaking container)
-      - /usr/src/app/node_modules
-      - ./.env:/usr/src/app/.env
+      - ./backend/uploads:/usr/src/app/uploads
     networks:
       - elims_net
 
@@ -70,6 +75,8 @@ services:
     restart: always
     depends_on:
       - api
+    environment:
+      VITE_API_URL: http://localhost:5000
     ports:
       - "8081:80"
     networks:
@@ -94,8 +101,8 @@ services:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      - CHOKIDAR_USEPOLLING=true
-      - VITE_API_BASE=http://api:5000
+      VITE_API_URL: http://localhost:5000
+      CHOKIDAR_USEPOLLING: 'true'
     networks:
       - elims_net
     profiles:
