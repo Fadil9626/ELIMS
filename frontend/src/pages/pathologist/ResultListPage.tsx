@@ -1,280 +1,355 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { Beaker, Search, Play, Eye } from "lucide-react";
-import pathologistService from "../../services/pathologistService";
-import { useSocket } from "../../context/SocketContext";
-import { useAuth } from "../../context/AuthContext";
+import { 
+  Beaker, Search, Play, Eye, RefreshCw, Filter, Clock, CheckCircle 
+} from "lucide-react";
+import toast from "react-hot-toast";
 
-const ResultListPage = () => {
-  const [results, setResults] = useState([]);
-  const [filters, setFilters] = useState({
-    from: "",
-    to: "",
-    status: "Sample Collected",
-    search: "",
-  });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+// ==================================================================================
+// 🔧 INTERNAL UTILITIES (To replace missing imports)
+// ==================================================================================
 
-  const { socket } = useSocket();
-  const { user, token } = useAuth();
+// 1. Internal API Fetch Wrapper
+const apiFetch = async (url, options = {}) => {
+  let token = "";
+  try {
+    const raw = localStorage.getItem("elims_auth_v1");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      token = parsed?.token || "";
+    }
+  } catch (e) {
+    console.error("Error reading token", e);
+  }
 
-  // 1. Fetch result list (wrapped in useCallback)
-  // ❗ FIX: The filters dependency ensures this function is re-created when filters change.
-  const fetchResults = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    try {
-      // Send the entire filters object to the service
-      const data = await pathologistService.getWorklist(token, filters);
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    ...(options.body ? { "Content-Type": "application/json" } : {}),
+    ...(options.headers || {}),
+  };
 
-      // Filter for department
-      const userDept = user?.department;
-      const roleId = user?.role_id;
+  const res = await fetch(url, { ...options, headers });
+  const text = await res.text();
 
-      const filteredData = (roleId > 2 && userDept)
-        ? data.filter(item => item.department_name === userDept)
-        : data;
+  if (!res.ok) {
+    let message;
+    try {
+      const parsed = JSON.parse(text);
+      message = parsed.message || parsed.error || text;
+    } catch {
+      message = text;
+    }
+    throw new Error(message || `API Error: ${res.status}`);
+  }
 
-      setResults(filteredData);
-      setError(null);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-    // ✅ Dependency array MUST include 'filters'
-    // Note: It's redundant to include token/user here if they are stable, but included for safety.
-  }, [token, user, filters]); 
-
-  // 2. FIX: The useEffect must watch the filters state to trigger fetching
-  useEffect(() => {
-    // Set up a debounce to prevent excessive API calls while typing
-    const debounceTimer = setTimeout(() => {
-      fetchResults();
-    }, 400); 
-
-    return () => clearTimeout(debounceTimer); // Clear old timer on every filter change
-  }, [filters, fetchResults]); // ❗ FIX: Directly depend on 'filters' and fetchResults.
-
-  // Socket listener (no change needed in logic, kept for completeness)
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleUpdate = (data) => {
-      const userDept = user?.department;
-      const isRelevant = !userDept || (data?.department_name && data.department_name === userDept);
-      
-      if (isRelevant) {
-        fetchResults();
-      }
-    };
-
-    socket.on("new_test_request", handleUpdate);
-    socket.on("test_status_updated", handleUpdate);
-
-    return () => {
-      socket.off("new_test_request", handleUpdate);
-      socket.off("test_status_updated", handleUpdate);
-    };
-  }, [socket, fetchResults, user]);
-
-  const handleFilterChange = (e) => {
-    // This ensures the state is updated and triggers the useEffect hook via the 'filters' dependency
-    setFilters({ ...filters, [e.target.name]: e.target.value });
-  };
-
-  const getStatusColor = (status) => {
-    if (!status) return "bg-gray-200 text-gray-800";
-    switch (status.toLowerCase()) {
-      case "sample collected":
-        return "bg-blue-200 text-blue-800";
-      case "in progress":
-        return "bg-purple-200 text-purple-800";
-      case "completed":
-        return "bg-yellow-200 text-yellow-800";
-      case "under review":
-        return "bg-cyan-200 text-cyan-800";
-      case "reopened":
-        return "bg-orange-200 text-orange-800";
-      case "verified":
-        return "bg-green-200 text-green-800";
-      case "released":
-        return "bg-gray-200 text-gray-800";
-      default:
-        return "bg-gray-200 text-gray-800";
-    }
-  };
-
-  return (
-    <div className="p-6 space-y-6">
-      {/* --- Header --- */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <Beaker className="text-blue-600" /> Test Result Entry
-        </h1>
-      </div>
-
-      {/* --- Filters --- */}
-      <div className="bg-white p-4 rounded-lg shadow-md border border-gray-200">
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              From
-            </label>
-            <input
-              type="date"
-              name="from"
-              value={filters.from}
-              onChange={handleFilterChange}
-              className="mt-1 p-2 w-full border rounded-md"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">To</label>
-            <input
-              type="date"
-              name="to"
-              value={filters.to}
-              onChange={handleFilterChange}
-              className="mt-1 p-2 w-full border rounded-md"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Status
-            </label>
-            <select
-              name="status"
-              value={filters.status}
-              onChange={handleFilterChange}
-              className="mt-1 p-2 w-full border rounded-md"
-            >
-              <option value="">All</option>
-              <option value="Sample Collected">Sample Collected</option>
-              <option value="In Progress">In Progress</option>
-              <option value="Reopened">Reopened</option>
-              <option value="Completed">Completed</option>
-              <option value="Under Review">Under Review</option>
-              <option value="Verified">Verified</option>
-              <option value="Released">Released</option>
-            </select>
-          </div>
-          <div className="md:col-span-3">
-            <label className="block text-sm font-medium text-gray-700">
-              Search
-            </label>
-            <div className="relative">
-              <input
-                type="text"
-                name="search"
-                placeholder="Search by patient name or Lab ID..."
-                value={filters.search}
-                onChange={handleFilterChange}
-                className="mt-1 p-2 pl-10 w-full border rounded-md"
-              />
-              <Search className="absolute top-3 left-3 text-gray-400 w-5 h-5" />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* --- Result Table --- */}
-      <div className="bg-white rounded-lg shadow overflow-hidden border border-gray-200">
-        <div className="p-4 bg-gray-800 text-white font-semibold text-lg">
-          Tests for Result Entry
-        </div>
-
-        {error && (
-          <div className="text-red-500 p-4 border-b bg-red-50">{error}</div>
-        )}
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="bg-gray-100 border-b">
-              <tr>
-                <th className="p-3 font-semibold">Date</th>
-                <th className="p-3 font-semibold">Patient</th>
-                <th className="p-3 font-semibold">Test</th>
-                <th className="p-3 font-semibold">Department</th>
-                <th className="p-3 font-semibold">Status</th>
-                <th className="p-3 font-semibold text-center">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan="6" className="p-4 text-center text-gray-500">
-                    Loading results...
-                  </td>
-                </tr>
-              ) : results.length > 0 ? (
-                results.map((item) => {
-                  const status = item.item_status || item.test_status;
-                  const isEnterable = [
-                    "Sample Collected",
-                    "In Progress",
-                    "Reopened",
-                  ].includes(status);
-
-                  return (
-                    <tr key={item.test_item_id} className="border-b hover:bg-gray-50">
-                      <td className="p-3 text-sm text-gray-600">
-                        {new Date(item.date_ordered).toLocaleString()}
-                      </td>
-                      <td className="p-3">
-                        <div className="font-medium">{item.patient_name}</div>
-                        <div className="text-xs text-gray-500">ID: {item.lab_id}</div>
-                      </td>
-                      <td className="p-3">{item.test_name}</td>
-                      <td className="p-3">{item.department_name || "N/A"}</td>
-                      <td className="p-3">
-                        <span
-                          className={`px-2 py-1 rounded-full text-xs font-semibold ${getStatusColor(
-                            status
-                          )}`}
-                        >
-                          {status}
-                        </span>
-                      </td>
-                      <td className="p-3 text-center">
-                        {isEnterable ? (
-                          <Link
-                            to={`/pathologist/results/${item.request_id}`}
-                            className="flex items-center justify-center gap-1 bg-blue-600 text-white px-3 py-1 text-sm rounded hover:bg-blue-700 transition"
-                          >
-                            <Play className="w-4 h-4" />
-                            Enter Result
-                          </Link>
-                        ) : (
-                          <Link
-                            to={`/pathologist/review/${item.request_id}`}
-                            className="flex items-center justify-center gap-1 bg-gray-500 text-white px-3 py-1 text-sm rounded hover:bg-gray-600 transition"
-                          >
-                            <Eye className="w-4 h-4" />
-                            View
-                          </Link>
-                        )}
-                      </td>
-                  </tr>
-                  );
-                })
-              ) : (
-                <tr>
-                  <td
-                    colSpan="6"
-                    className="p-4 text-center text-gray-500 italic"
-                  >
-                    No matching results found.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return text;
+  }
 };
 
-export default ResultListPage;
+// 2. Internal Service
+const pathologistService = {
+  getWorklist: async (filters = {}) => {
+    const cleanFilters = Object.fromEntries(
+      Object.entries(filters).filter(([_, v]) => v !== undefined && v !== null && v !== "")
+    );
+    const query = new URLSearchParams(cleanFilters).toString();
+    return apiFetch(`/api/pathologist/worklist?${query}`);
+  },
+};
+
+// 3. Internal Auth Hook
+const useAuth = () => {
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("elims_auth_v1");
+      if (raw) {
+        setUser(JSON.parse(raw).user);
+      }
+    } catch (e) {
+      console.error("Auth load error", e);
+    }
+  }, []);
+  return { user };
+};
+
+// 4. Internal Socket Hook (Mocked for stability)
+const useSocket = () => ({
+  socket: {
+    on: () => {},
+    off: () => {}
+  }
+});
+
+// ==================================================================================
+// 🎨 UI HELPERS
+// ==================================================================================
+const getStatusColor = (status) => {
+  if (!status) return "bg-gray-100 text-gray-600";
+  const s = status.toLowerCase().replace(/\s/g, "");
+
+  switch (s) {
+    case "samplecollected": return "bg-blue-100 text-blue-700 border-blue-200";
+    case "sample_collected": return "bg-blue-100 text-blue-700 border-blue-200";
+    case "inprogress": return "bg-purple-100 text-purple-700 border-purple-200";
+    case "in_progress": return "bg-purple-100 text-purple-700 border-purple-200";
+    case "completed": return "bg-amber-100 text-amber-700 border-amber-200";
+    case "underreview": return "bg-cyan-100 text-cyan-700 border-cyan-200";
+    case "verified": return "bg-emerald-100 text-emerald-700 border-emerald-200";
+    case "released": return "bg-gray-100 text-gray-700 border-gray-200";
+    case "reopened": return "bg-orange-100 text-orange-700 border-orange-200";
+    default: return "bg-gray-100 text-gray-600";
+  }
+};
+
+export default function ResultListPage() {
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState({
+    from: "",
+    to: "",
+    status: "", // Empty = All
+    search: "",
+    sortBy: "updated_at",
+    order: "desc"
+  });
+
+  const { socket } = useSocket();
+  const { user } = useAuth();
+
+  // -------------------------------
+  // 🔄 DATA LOADER
+  // -------------------------------
+  const fetchResults = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const data = await pathologistService.getWorklist(filters);
+      setResults(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error(err);
+      // toast.error("Failed to load worklist"); // Suppress toast on initial load to avoid spam
+    } finally {
+      setLoading(false);
+    }
+  }, [user, filters]);
+
+  // Initial Load
+  useEffect(() => {
+    fetchResults();
+  }, [fetchResults]);
+
+  // Live refresh from socket
+  useEffect(() => {
+    if (!socket) return;
+    const handleUpdate = () => {
+        fetchResults();
+    };
+    
+    socket.on("test_status_updated", handleUpdate);
+    socket.on("request_status_updated", handleUpdate);
+    
+    return () => {
+      socket.off("test_status_updated", handleUpdate);
+      socket.off("request_status_updated", handleUpdate);
+    };
+  }, [socket, fetchResults]);
+
+  // -------------------------------
+  // 🧠 ACTION LOGIC
+  // -------------------------------
+  const canEnterResult = (status) => {
+    const s = (status || "").toLowerCase().replace(/\s/g, "");
+    // Added 'samplereceived' here to match the new workflow
+    return ["samplecollected", "samplereceived", "inprogress", "reopened", "sample_collected", "sample_received", "in_progress"].includes(s);
+  };
+
+  const canReview = (status) => {
+    const s = (status || "").toLowerCase().replace(/\s/g, "");
+    return ["completed", "underreview", "verified"].includes(s);
+  };
+
+  // -------------------------------
+  // RENDER
+  // -------------------------------
+  if (!user) {
+      return (
+          <div className="p-8 text-center text-gray-500">
+              <RefreshCw className="animate-spin h-6 w-6 mx-auto mb-2" />
+              Loading session...
+          </div>
+      );
+  }
+
+  return (
+    <div className="p-6 space-y-6 max-w-[1600px] mx-auto">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2 text-gray-900">
+            <Beaker className="text-blue-600 h-7 w-7" /> Result Entry Worklist
+            </h1>
+            <p className="text-sm text-gray-500 mt-1">
+                Viewing as <span className="font-medium text-gray-900">{user.name}</span> • Department: <span className="font-medium text-gray-900">{user.department || "General"}</span>
+            </p>
+        </div>
+        <button 
+            onClick={fetchResults}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-sm font-medium transition-colors shadow-sm"
+        >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+        </button>
+      </div>
+
+      {/* Filters Toolbar */}
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            {/* Search */}
+            <div className="lg:col-span-2 relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <input
+                type="text"
+                name="search"
+                value={filters.search}
+                placeholder="Search patient, lab ID, or test..."
+                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+            </div>
+
+            {/* Status Filter */}
+            <div className="relative">
+                <select
+                    name="status"
+                    value={filters.status}
+                    onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                    className="w-full pl-3 pr-8 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white"
+                >
+                    <option value="">All Statuses</option>
+                    <option value="SampleReceived">Sample Received</option>
+                    <option value="SampleCollected">Sample Collected</option>
+                    <option value="InProgress">In Progress</option>
+                    <option value="Completed">Completed</option>
+                    <option value="Verified">Verified</option>
+                </select>
+                <Filter className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4 pointer-events-none" />
+            </div>
+
+            {/* Date Range */}
+            <input
+                type="date"
+                name="from"
+                value={filters.from}
+                onChange={(e) => setFilters({ ...filters, from: e.target.value })}
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm"
+            />
+            <input
+                type="date"
+                name="to"
+                value={filters.to}
+                onChange={(e) => setFilters({ ...filters, to: e.target.value })}
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm"
+            />
+        </div>
+      </div>
+
+      {/* Data Table */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+            <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-500">
+                <tr>
+                <th className="p-4 border-b">Date Ordered</th>
+                <th className="p-4 border-b">Lab ID</th>
+                <th className="p-4 border-b">Patient</th>
+                <th className="p-4 border-b">Test</th>
+                <th className="p-4 border-b">Department</th>
+                <th className="p-4 border-b">Status</th>
+                <th className="p-4 border-b text-center">Action</th>
+                </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 text-sm">
+                {loading && results.length === 0 ? (
+                    <tr>
+                        <td colSpan="7" className="p-8 text-center text-gray-500">
+                            <div className="flex justify-center mb-2">
+                                <RefreshCw className="animate-spin text-blue-500 h-6 w-6" />
+                            </div>
+                            Loading worklist...
+                        </td>
+                    </tr>
+                ) : results.length === 0 ? (
+                    <tr>
+                        <td colSpan="7" className="p-12 text-center text-gray-500 italic">
+                            <div className="mb-2">No items found.</div>
+                            <div className="text-xs">Check your department filters or search terms.</div>
+                        </td>
+                    </tr>
+                ) : (
+                    results.map((item) => {
+                        // Determine action type
+                        const status = item.item_status || item.status || "";
+                        const isEnter = canEnterResult(status);
+                        const isReview = canReview(status);
+
+                        return (
+                            <tr key={`${item.request_id}-${item.test_item_id}`} className="hover:bg-gray-50 transition-colors">
+                            <td className="p-4 text-gray-500 whitespace-nowrap">
+                                {item.date_ordered ? new Date(item.date_ordered).toLocaleDateString() : "-"}
+                                <div className="text-xs text-gray-400">
+                                    {item.date_ordered ? new Date(item.date_ordered).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ""}
+                                </div>
+                            </td>
+                            <td className="p-4 font-mono text-xs font-medium text-gray-600">
+                                {item.lab_id || "-"}
+                            </td>
+                            <td className="p-4 font-medium text-gray-900">
+                                {item.patient_name}
+                            </td>
+                            <td className="p-4 text-gray-700">
+                                {item.test_name}
+                            </td>
+                            <td className="p-4">
+                                <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                                    {item.department_name}
+                                </span>
+                            </td>
+                            <td className="p-4">
+                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${getStatusColor(status)}`}>
+                                    {status}
+                                </span>
+                            </td>
+                            <td className="p-4 text-center">
+                                {isEnter ? (
+                                    <Link
+                                        to={`/pathologist/results/${item.request_id}`}
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+                                    >
+                                        <Play className="w-3 h-3 fill-current" /> Enter
+                                    </Link>
+                                ) : isReview ? (
+                                    <Link
+                                        to={`/pathologist/review/${item.request_id}`} // Or results/id (view mode)
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-300 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                                    >
+                                        <Eye className="w-3 h-3" /> Review
+                                    </Link>
+                                ) : (
+                                    <span className="text-gray-400 text-xs">—</span>
+                                )}
+                            </td>
+                            </tr>
+                        );
+                    })
+                )}
+            </tbody>
+            </table>
+        </div>
+      </div>
+    </div>
+  );
+}

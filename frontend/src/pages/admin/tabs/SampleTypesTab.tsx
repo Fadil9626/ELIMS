@@ -1,8 +1,7 @@
-// src/pages/admin/tabs/SampleTypesTab.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { PlusCircle, Trash2, Pencil, XCircle, Save, FlaskConical } from "lucide-react";
 import toast from "react-hot-toast";
-import labConfigService from "../../../services/labConfigService";
+import apiFetch from "../../../services/apiFetch"; // 🚀 1. Import apiFetch
 
 export default function SampleTypesTab() {
   const [samples, setSamples] = useState([]);
@@ -10,18 +9,21 @@ export default function SampleTypesTab() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ name: "", description: "" });
 
-  const token = JSON.parse(localStorage.getItem("userInfo"))?.token;
+  // 🚀 2. REMOVED manual token management
 
-  const loadSamples = async () => {
+  const loadSamples = useCallback(async () => { // 🚀 3. Added useCallback
     try {
-      const data = await labConfigService.getSampleTypes(token);
+      // 🚀 4. Use apiFetch
+      const data = await apiFetch("/api/sample-types");
       setSamples(data || []);
     } catch {
       toast.error("❌ Failed to load sample types");
     }
-  };
+  }, []); // Stable dependency
 
-  useEffect(() => { loadSamples(); }, []);
+  useEffect(() => { 
+    loadSamples(); 
+  }, [loadSamples]);
 
   const openAdd = () => {
     setEditing(null);
@@ -38,19 +40,17 @@ export default function SampleTypesTab() {
   const handleSave = async (e) => {
     e.preventDefault();
     try {
+      // 🚀 5. Use apiFetch for save/update
       const url = editing
         ? `/api/sample-types/${editing.id}`
         : "/api/sample-types";
       const method = editing ? "PUT" : "POST";
-      const res = await fetch(url, {
+      
+      await apiFetch(url, {
         method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify(form),
       });
-      if (!res.ok) throw new Error("Failed");
+
       toast.success(editing ? "✅ Updated" : "✅ Added");
       setShowModal(false);
       loadSamples();
@@ -62,11 +62,10 @@ export default function SampleTypesTab() {
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this sample type?")) return;
     try {
-      const res = await fetch(`/api/sample-types/${id}`, {
+      // 🚀 6. Use apiFetch for delete
+      await apiFetch(`/api/sample-types/${id}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error("Failed");
       toast.success("🗑️ Deleted");
       loadSamples();
     } catch {

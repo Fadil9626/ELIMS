@@ -1,64 +1,113 @@
-import React from "react";
+// frontend/src/pages/dashboard/DashboardRouter.jsx
+import React, { useEffect } from "react";
 import { useAuth } from "../../context/AuthContext";
-
-// ✅ Real dashboards
-import AdminDashboardPage from "./AdminDashboardPage";
-import ReceptionDashboardPage from "./ReceptionDashboardPage";
-
-// ✅ New unified dashboard (Lab Tech + Pathologist)
-import PathologyDashboardS3 from "../pathologist/PathologyDashboardS3";
-
-import PhlebotomyWorklistPage from "../phlebotomy/PhlebotomyWorklistPage";
-import InventoryPage from "../inventory/InventoryPage";
+import { useNavigate } from "react-router-dom";
 
 const Placeholder = ({ label }) => (
   <div className="p-6 text-gray-600 text-lg">{label}</div>
 );
 
 export default function DashboardRouter() {
-  const { user, can } = useAuth(); 
-  if (!user) return null; // Wait for user to be loaded
+  const { user } = useAuth();
+  const navigate = useNavigate();
 
-  // Check for permissions using the correct CAPITALIZED resource names
-  const isSuperAdmin = can("*:*");
-  const isAdmin = can("Admin", "View");
-  const isReception = can("Patients", "Create");
-  const isLabUser = can("Results", "Enter") || can("Pathologist", "Verify");
-  const isPhlebotomist = can("Phlebotomy", "View");
-  const isInventory = can("Inventory", "View");
-  const isDoctor = can("Reports", "View");
-  const isFinance = can("Billing", "Create");
+  if (!user) return null;
 
-  // ✅ **FIX: The 'isLabUser' check is now BEFORE 'isReception'**
-  
-  if (isSuperAdmin || isAdmin) {
-    return <AdminDashboardPage />;
-  }
+  // Normalize slugs
+  const slugs = (user.permission_slugs || [])
+    .filter(Boolean)
+    .map((s) => s.toLowerCase());
 
-  // If a user can enter/verify results, send them to the lab dashboard
-  if (isLabUser) {
-    return <PathologyDashboardS3 />;
-  }
+  // -------- ROLE CHECKS --------
+  const isSuperAdmin = slugs.includes("*:*");
 
-  // If a user can create patients (and is not a lab user), send them to reception
-  if (isReception) {
-    return <ReceptionDashboardPage />;
-  }
-  
-  // Other roles
-  if (isPhlebotomist) {
-    return <PhlebotomyWorklistPage />;
-  }
-  if (isInventory) {
-    return <InventoryPage />;
-  }
-  if (isFinance) {
-    return <Placeholder label="Finance Dashboard" />; 
-  }
-  if (isDoctor) {
-    return <Placeholder label="Clinician Dashboard" />;
-  }
+  const isAdmin =
+    isSuperAdmin ||
+    slugs.includes("admin:*") ||
+    slugs.includes("settings:manage");
 
-  // Fallback for any other roles (like "Viewer")
-  return <Placeholder label={`Welcome, ${user.full_name}`} />;
+  const isPhleb = slugs.includes("phlebotomy:view");
+
+  const canRegisterPatients =
+    slugs.includes("patients:view") ||
+    slugs.includes("patients:create") ||
+    slugs.includes("patients:register");
+
+  const canProcessBilling =
+    slugs.includes("billing:create") || slugs.includes("billing:view");
+
+  const isLab =
+    slugs.includes("results:enter") ||
+    slugs.includes("results:verify") ||
+    slugs.includes("pathologist:verify");
+
+  const isInventory = slugs.includes("inventory:view");
+
+  const isDoctor = slugs.includes("reports:view");
+
+  // Finance: billing-only users
+  const isFinance =
+    canProcessBilling &&
+    !canRegisterPatients &&
+    !isPhleb &&
+    !isAdmin &&
+    !isLab;
+
+  // 🔐 RECEPTION: must NOT be phleb, lab or admin
+  const isReception =
+    (canRegisterPatients || canProcessBilling) &&
+    !isPhleb &&
+    !isLab &&
+    !isAdmin;
+
+  useEffect(() => {
+    // 🧠 Priority: Admin → Phleb → Lab → Reception → Inventory → Finance → Doctor
+    if (isSuperAdmin || isAdmin) {
+      navigate("/admin/dashboard", { replace: true });
+      return;
+    }
+
+    if (isPhleb) {
+      navigate("/phlebotomy/worklist", { replace: true });
+      return;
+    }
+
+    if (isLab) {
+      navigate("/pathologist/worklist", { replace: true });
+      return;
+    }
+
+    if (isReception) {
+      navigate("/reception/dashboard", { replace: true });
+      return;
+    }
+
+    if (isInventory) {
+      navigate("/inventory", { replace: true });
+      return;
+    }
+
+    if (isFinance) {
+      navigate("/finance", { replace: true });
+      return;
+    }
+
+    if (isDoctor) {
+      navigate("/reports", { replace: true });
+      return;
+    }
+  }, [
+    isSuperAdmin,
+    isAdmin,
+    isPhleb,
+    isLab,
+    isReception,
+    isInventory,
+    isFinance,
+    isDoctor,
+    navigate,
+  ]);
+
+  // Small placeholder while redirect happens / if no role matched
+  return <Placeholder label="Redirecting to your dashboard..." />;
 }

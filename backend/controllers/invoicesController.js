@@ -1,161 +1,283 @@
-// backend/controllers/invoicesController.js
+// backend/controllers/invoiceController.js
 const pool = require("../config/database");
 
-// -------------------------------------------------------------
-// Helper: Load Organization Profile
-// -------------------------------------------------------------
-async function loadOrgProfile(client) {
-  // First: flat keys in system_settings (your current setup)
-  try {
-    const { rows } = await client.query(
-      `SELECT key, value FROM system_settings
-       WHERE key IN ('lab_name','lab_address','lab_phone','lab_email','lab_logo_url','tax_id')`
-    );
-    if (rows.length) {
-      const m = rows.reduce((a, r) => ((a[r.key] = r.value), a), {});
-      return {
-        name: m.lab_name || "",
-        address: m.lab_address || "",
-        phone: m.lab_phone || "",
-        email: m.lab_email || "",
-        logo_url: m.lab_logo_url || "",
-        tax_id: m.tax_id || "",
-      };
-    }
-  } catch (_) {}
-
-  // Fallbacks if you later store JSON payloads
-  try {
-    const { rows } = await client.query(
-      `SELECT value FROM settings WHERE key IN ('lab_profile','org_profile') LIMIT 1`
-    );
-    if (rows[0]?.value) {
-      const v = rows[0].value;
-      return {
-        name: v.name || v.lab_name || "",
-        address: v.address || "",
-        phone: v.phone || "",
-        email: v.email || "",
-        logo_url: v.logo_url || "",
-        tax_id: v.tax_id || "",
-      };
-    }
-  } catch (_) {}
-
-  return { name: "", address: "", phone: "", email: "", logo_url: "", tax_id: "" };
-}
-
-// -------------------------------------------------------------
-// GET /api/invoices/:id  (Generate Invoice Data)
-// -------------------------------------------------------------
-exports.getInvoiceForTestRequest = async (req, res) => {
-  const requestId = Number(req.params.id);
-  if (!Number.isInteger(requestId)) return res.status(400).json({ message: "Invalid request id" });
-
-  const client = await pool.connect();
-  try {
-    const headerSql = `
-      SELECT
-        tr.id AS request_id,
-        tr.status, tr.payment_status, tr.payment_method, tr.payment_date,
-        tr.created_at, tr.updated_at,
-        p.id AS patient_id, p.first_name, p.last_name, p.gender, p.date_of_birth,
-        w.name AS ward_name,
-        u.full_name AS doctor_name
-      FROM test_requests tr
-      JOIN patients p ON p.id = tr.patient_id
-      LEFT JOIN wards w ON w.id = p.ward_id
-      LEFT JOIN users u ON u.id = tr.doctor_id
-      WHERE tr.id = $1
-      LIMIT 1`;
-    const headerRes = await client.query(headerSql, [requestId]);
-    if (headerRes.rowCount === 0) return res.status(404).json({ message: "Test request not found" });
-    const header = headerRes.rows[0];
-
-    const itemsSql = `
-      SELECT tri.id AS item_id,
-             tc.id AS test_id,
-             tc.name AS test_name,
-             COALESCE(tc.price,0)::numeric(12,2) AS price,
-             tc.is_panel
-      FROM test_request_items tri
-      JOIN test_catalog tc ON tc.id = tri.test_catalog_id
-      WHERE tri.test_request_id = $1
-      ORDER BY tc.name ASC`;
-    const itemsRes = await client.query(itemsSql, [requestId]);
-    const items = itemsRes.rows.map(r => ({
-      item_id: r.item_id,
-      test_id: r.test_id,
-      test_name: r.test_name,
-      price: Number(r.price || 0),
-      qty: 1,
-      is_panel: !!r.is_panel,
-      line_total: Number(r.price || 0),
-    }));
-
-    const subtotal = items.reduce((s, it) => s + it.line_total, 0);
-    const tax = 0;
-    const total = subtotal + tax;
-
-    const org = await loadOrgProfile(client);
-
-    res.json({
-      header,
-      items,
-      totals: { subtotal, tax, total, currency: "Le" },
-      org,
-    });
-  } catch (e) {
-    console.error("❌ getInvoiceForTestRequest:", e.message);
-    res.status(500).json({ message: "Server error generating invoice" });
-  } finally {
-    client.release();
-  }
+// =============================================================
+// 🔧 Helper: Unified error response
+// =============================================================
+const sendError = (res, handler, error, msg = "Server Error") => {
+  console.error(`❌ ${handler}:`, error.message);
+  return res.status(500).json({
+    message: msg,
+    error: error.message || error,
+  });
 };
 
-// -------------------------------------------------------------
-// POST /api/payments/:id/process  (Process Payment)
-// -------------------------------------------------------------
-exports.processPaymentForTestRequest = async (req, res) => {
-    const requestId = Number(req.params.id);
-    const { paymentMethod, paymentDate } = req.body;
-    
-    if (!Number.isInteger(requestId)) {
-        return res.status(400).json({ message: "Invalid request ID" });
+// =============================================================
+// 📌 GET ALL INVOICES  (Optional: ?status=Paid|Pending)
+// =============================================================
+const listInvoices = async (req, res) => {
+  const { status } = req.query;
+
+  try {
+    const params = [];
+    let where = "";
+
+    if (status) {
+      params.push(status);
+      where = `WHERE inv.status = $${params.length}`;
     }
 
-    const client = await pool.connect();
-    try {
-        const updateQuery = `
-            UPDATE test_requests
-            SET payment_status = 'paid',
-                payment_method = $1,
-                payment_date = COALESCE($2, NOW()),
-                updated_at = NOW()
-            WHERE id = $3
-            RETURNING id, payment_status, payment_method, payment_date;`;
+    const { rows } = await pool.query(
+      `
+      SELECT
+        inv.id,
+        inv.test_request_id,
+        inv.total_amount,
+        inv.amount_paid,
+        inv.status,
+        inv.created_at,
 
-        const result = await client.query(updateQuery, [
-            paymentMethod || 'Cash',
-            paymentDate,
-            requestId,
-        ]);
+        (
+          COALESCE(p.first_name,'') || ' ' ||
+          COALESCE(p.middle_name || '','') || ' ' ||
+          COALESCE(p.last_name,'')
+        ) AS patient_name,
 
-        if (result.rowCount === 0) {
-            return res.status(404).json({ message: "Test request not found or already paid" });
-        }
+        p.mrn
 
-        // ✅ FIX: Return the correct 200 series status code for success
-        res.status(200).json({ 
-            message: "Payment processed successfully.",
-            data: result.rows[0],
-            paymentStatus: 'paid'
-        });
+      FROM invoices inv
+      LEFT JOIN test_requests tr ON tr.id = inv.test_request_id
+      LEFT JOIN patients p ON p.id = tr.patient_id
+      ${where}
+      ORDER BY inv.created_at DESC
+      `,
+      params
+    );
 
-    } catch (e) {
-        console.error("❌ processPayment Error:", e.message);
-        res.status(500).json({ message: "Server error processing payment" });
-    } finally {
-        client.release();
+    return res.json(rows);
+  } catch (error) {
+    return sendError(res, "listInvoices", error, "Failed to load invoices");
+  }
+};
+
+// =============================================================
+// 📌 GET INVOICE BY ID
+// =============================================================
+const getInvoiceById = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT
+        inv.id,
+        inv.test_request_id,
+        inv.total_amount,
+        inv.amount_paid,
+        inv.status,
+        inv.created_at,
+
+        (
+          COALESCE(p.first_name,'') || ' ' ||
+          COALESCE(p.middle_name || '','') || ' ' ||
+          COALESCE(p.last_name,'')
+        ) AS patient_name,
+
+        p.mrn
+
+      FROM invoices inv
+      LEFT JOIN test_requests tr ON tr.id = inv.test_request_id
+      LEFT JOIN patients p ON p.id = tr.patient_id
+      WHERE inv.id = $1
+      `,
+      [id]
+    );
+
+    if (!rows.length) return res.status(404).json({ message: "Invoice not found" });
+
+    return res.json(rows[0]);
+  } catch (error) {
+    return sendError(res, "getInvoiceById", error, "Failed to fetch invoice");
+  }
+};
+
+// =============================================================
+// 📌 GET OR BUILD INVOICE DATA FOR A TEST REQUEST
+// =============================================================
+const getInvoiceForTestRequest = async (req, res) => {
+  const { id: requestId } = req.params;
+
+  try {
+    // --- Load Basic Test Request + Patient ---
+    const { rows: baseRows } = await pool.query(
+      `
+      SELECT 
+        tr.id AS request_id,
+        tr.created_at,
+        tr.status AS request_status,
+        tr.payment_amount,
+        tr.payment_status,
+        tr.payment_method,
+
+        p.id AS patient_id,
+        p.mrn,
+        p.phone AS patient_phone,
+
+        (
+          COALESCE(p.first_name,'') || ' ' ||
+          COALESCE(p.middle_name || '','') || ' ' ||
+          COALESCE(p.last_name,'')
+        ) AS patient_name,
+
+        w.name AS ward_name
+
+      FROM test_requests tr
+      LEFT JOIN patients p ON p.id = tr.patient_id
+      LEFT JOIN wards w ON w.id = tr.ward_id
+      WHERE tr.id = $1
+      `,
+      [requestId]
+    );
+
+    if (!baseRows.length) {
+      return res.status(404).json({ message: "Test request not found" });
     }
+
+    const request = baseRows[0];
+
+    // --- Load Test Items (FIXED COLUMN NAME) ---
+    const { rows: itemRows } = await pool.query(
+      `
+      SELECT 
+        tri.id AS item_id,
+        tc.id AS test_id,
+        tc.name AS test_name,
+        tc.price
+      FROM test_request_items tri
+      LEFT JOIN test_catalog tc ON tc.id = tri.test_catalog_id
+      WHERE tri.test_request_id = $1
+      `,
+      [requestId]
+    );
+
+    const items = itemRows.map((i) => ({
+      id: i.item_id,
+      test_id: i.test_id,
+      name: i.test_name,
+      price: Number(i.price || 0),
+    }));
+
+    const total = items.reduce((sum, i) => sum + i.price, 0);
+    const paid = Number(request.payment_amount || 0);
+
+    // --- Create Full Invoice Response ---
+    return res.json({
+      invoice_code: `INV-${String(requestId).padStart(5, "0")}`,
+      request_id: requestId,
+      created_at: request.created_at,
+
+      patient: {
+        id: request.patient_id,
+        mrn: request.mrn,
+        name: request.patient_name.trim(),
+        phone: request.patient_phone,
+        ward: request.ward_name || "N/A",
+      },
+
+      items,
+      billing: {
+        amount_due: total,
+        amount_paid: paid,
+        balance: Math.max(total - paid, 0),
+        payment_status: request.payment_status,
+        payment_method: request.payment_method,
+      },
+    });
+
+  } catch (error) {
+    return sendError(res, "getInvoiceForTestRequest", error, "Failed retrieving invoice data");
+  }
+};
+
+// =============================================================
+// 📌 CREATE OR UPDATE INVOICE FOR TEST REQUEST
+// =============================================================
+const createOrUpdateInvoiceForTestRequest = async (req, res) => {
+  const { id: requestId } = req.params;
+  const { total_amount } = req.body;
+
+  if (!total_amount || isNaN(total_amount))
+    return res.status(400).json({ message: "Valid total_amount required" });
+
+  try {
+    const existing = await pool.query(
+      `SELECT id FROM invoices WHERE test_request_id = $1`,
+      [requestId]
+    );
+
+    let result;
+
+    if (existing.rows.length) {
+      result = await pool.query(
+        `UPDATE invoices SET total_amount = $2 WHERE test_request_id = $1 RETURNING *`,
+        [requestId, total_amount]
+      );
+    } else {
+      result = await pool.query(
+        `
+        INSERT INTO invoices (test_request_id, total_amount, status, amount_paid)
+        VALUES ($1, $2, 'Pending', 0)
+        RETURNING *
+        `,
+        [requestId, total_amount]
+      );
+    }
+
+    return res.json(result.rows[0]);
+  } catch (error) {
+    return sendError(res, "createOrUpdateInvoiceForTestRequest", error);
+  }
+};
+
+// =============================================================
+// 💳 RECORD PAYMENT
+// =============================================================
+const recordPayment = async (req, res) => {
+  const { id } = req.params;
+  const { amount } = req.body;
+
+  if (!amount || isNaN(amount))
+    return res.status(400).json({ message: "Valid payment amount required" });
+
+  try {
+    const { rows } = await pool.query(`SELECT * FROM invoices WHERE id = $1`, [id]);
+
+    if (!rows.length) return res.status(404).json({ message: "Invoice not found" });
+
+    const invoice = rows[0];
+    const newPaid = Number(invoice.amount_paid) + Number(amount);
+    const status = newPaid >= invoice.total_amount ? "Paid" : "Partial";
+
+    const { rows: updated } = await pool.query(
+      `
+      UPDATE invoices 
+      SET amount_paid = $2, status = $3 
+      WHERE id = $1
+      RETURNING *
+      `,
+      [id, newPaid, status]
+    );
+
+    return res.json(updated[0]);
+  } catch (error) {
+    return sendError(res, "recordPayment", error);
+  }
+};
+
+module.exports = {
+  listInvoices,
+  getInvoiceById,
+  getInvoiceForTestRequest,
+  createOrUpdateInvoiceForTestRequest,
+  recordPayment,
 };

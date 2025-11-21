@@ -1,13 +1,50 @@
-// controllers/testRequestController.js
+// controllers/testRequestsController.js
 const pool = require("../config/database");
 
-/* =============================================================
- * Helper: Smart Reference Range (fits your normal_ranges schema)
- * ============================================================= */
-async function getSmartRefRange(client, analyteId, gender = null, ageYears = null) {
-  if (!analyteId) return null;
+// ------------------------------------------------------------
+// 🛠️ Helper: Resolve Department Name
+// ------------------------------------------------------------
+async function resolveDeptName(deptInput) {
+  if (!deptInput) return null;
+  if (typeof deptInput === "string" && isNaN(parseInt(deptInput))) {
+    return deptInput.trim();
+  }
+  try {
+    const { rows } = await pool.query(
+      "SELECT name FROM departments WHERE id = $1",
+      [deptInput]
+    );
+    return rows.length > 0 ? rows[0].name.trim() : null;
+  } catch (e) {
+    return null;
+  }
+}
 
-  // Normalize gender to 'male' | 'female' | null
+// ------------------------------------------------------------
+// 🧮 Helper: Calculate Age
+// ------------------------------------------------------------
+function getAgeInYears(dob) {
+  if (!dob) return null;
+  const birthDate = new Date(dob);
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const m = today.getMonth() - birthDate.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) age--;
+  return age >= 0 ? age : 0;
+}
+
+// ------------------------------------------------------------
+// 🧮 Helper: Smart Reference Range
+// ------------------------------------------------------------
+async function getSmartRefDetails(
+  client,
+  analyteId,
+  resultValue,
+  gender = null,
+  ageYears = null
+) {
+  if (!analyteId) return { text: null, flag: null };
+
   const g =
     gender && typeof gender === "string"
       ? gender.toLowerCase().startsWith("m")
@@ -18,64 +55,68 @@ async function getSmartRefRange(client, analyteId, gender = null, ageYears = nul
       : null;
 
   const { rows } = await client.query(
-    `
-    SELECT range_type, min_value, max_value,
-           qualitative_value, symbol_operator, reference_range_text, gender
-    FROM normal_ranges
-    WHERE analyte_id = $1
-      -- match explicit gender OR allow 'Any'
-      AND (
-        $2 IS NULL
-        OR LOWER(gender::text) = $2
-        OR gender::text = 'Any'
-      )
-      AND (min_age IS NULL OR $3 >= min_age)
-      AND (max_age IS NULL OR $3 <= max_age)
-    ORDER BY
-      -- Prefer specific gender over 'Any'
-      CASE WHEN gender::text = 'Any' THEN 1 ELSE 0 END,
-      id ASC
-    LIMIT 1;
-    `,
+    `SELECT range_type,
+            min_value,
+            max_value,
+            qualitative_value,
+            symbol_operator,
+            reference_range_text
+     FROM normal_ranges
+     WHERE analyte_id = $1
+       AND ($2::text IS NULL OR LOWER(gender::text) = $2::text OR gender::text = 'Any')
+       AND (min_age IS NULL OR $3::int >= min_age)
+       AND (max_age IS NULL OR $3::int <= max_age)
+     ORDER BY CASE WHEN gender::text = 'Any' THEN 1 ELSE 0 END,
+              id ASC
+     LIMIT 1`,
     [analyteId, g, ageYears]
   );
 
-  if (!rows.length) return null;
+  if (!rows.length) return { text: null, flag: null };
   const r = rows[0];
-
   let text = null;
+  let flag = null;
+
   const rt = (r.range_type || "").toLowerCase();
   if (rt === "numeric") {
-    if (r.min_value != null && r.max_value != null) text = `${r.min_value} – ${r.max_value}`;
-    else if (r.min_value != null) text = `≥ ${r.min_value}`;
-    else if (r.max_value != null) text = `≤ ${r.max_value}`;
+    if (r.min_value != null && r.max_value != null) {
+      text = `${r.min_value} – ${r.max_value}`;
+    } else if (r.min_value != null) {
+      text = `≥ ${r.min_value}`;
+    } else if (r.max_value != null) {
+      text = `≤ ${r.max_value}`;
+    }
   }
   if (!text && r.qualitative_value) text = r.qualitative_value;
-  if (!text && r.symbol_operator && r.max_value != null) text = `${r.symbol_operator} ${r.max_value}`;
-  if (r.reference_range_text) text = text ? `${text} (${r.reference_range_text})` : r.reference_range_text;
-
-  return text;
-}
-
-/* =============================================================
- * Helper: Audit Log (aligned to audit_logs)
- * ============================================================= */
-async function logAudit(client, userId, userName, action, entityType, entityId, detailsObj = {}) {
-  // NOTE: This is likely the source of your previous 500 errors.
-  // We've left it commented out until utils/auditLogger.js is fixed.
-  /*
-  try {
-    await client.query(
-      `
-      INSERT INTO audit_logs (user_id, user_name, action, entity_type, entity_id, entity, details, created_at)
-      VALUES ($1, $2, $3, $4, $5, $4, $6::jsonb, NOW());
-      `,
-      [userId || null, userName || null, action, entityType, entityId, JSON.stringify(detailsObj)]
-    );
-  } catch {
-    // ignore audit errors
+  if (!text && r.symbol_operator && r.max_value != null) {
+    text = `${r.symbol_operator} ${r.max_value}`;
   }
-  */
+  if (r.reference_range_text) {
+    text = text
+      ? `${text} (${r.reference_range_text})`
+      : r.reference_range_text;
+  }
+
+  if (
+    resultValue !== null &&
+    resultValue !== undefined &&
+    resultValue !== ""
+  ) {
+    if (rt === "numeric") {
+      const num = parseFloat(resultValue);
+      if (!isNaN(num)) {
+        if (r.min_value != null && num < r.min_value) flag = "L";
+        else if (r.max_value != null && num > r.max_value) flag = "H";
+      }
+    } else {
+      if (r.qualitative_value) {
+        const cleanRes = String(resultValue).toLowerCase().trim();
+        const cleanRef = String(r.qualitative_value).toLowerCase().trim();
+        if (cleanRes !== cleanRef && cleanRef !== "any") flag = "A";
+      }
+    }
+  }
+  return { text, flag };
 }
 
 /* =============================================================
@@ -84,19 +125,25 @@ async function logAudit(client, userId, userName, action, entityType, entityId, 
 async function getAllTestRequests(req, res) {
   try {
     const { rows } = await pool.query(`
-      SELECT tr.id, tr.status, tr.payment_status, tr.payment_amount,
-             tr.payment_method, tr.created_at,
-             p.id AS patient_id,
-             CONCAT(p.first_name,' ',p.last_name) AS patient_name,
-             DATE_PART('year', AGE(CURRENT_DATE, p.date_of_birth))::int AS age
+      SELECT
+        tr.id,
+        tr.status,
+        tr.payment_status,
+        tr.payment_amount,
+        tr.payment_method,
+        tr.created_at,
+        tr.priority,                           -- 🔴 include priority
+        p.id AS patient_id,
+        CONCAT(p.first_name,' ',p.last_name) AS patient_name,
+        DATE_PART('year', AGE(CURRENT_DATE, p.date_of_birth))::int AS age
       FROM test_requests tr
       LEFT JOIN patients p ON tr.patient_id = p.id
-      ORDER BY tr.id DESC;
+      ORDER BY tr.id DESC
     `);
     res.json(rows);
   } catch (err) {
     console.error("❌ getAllTestRequests:", err.message);
-    res.status(500).json({ message: "Server error fetching test requests" });
+    res.status(500).json({ message: "Server error" });
   }
 }
 
@@ -105,73 +152,89 @@ async function getAllTestRequests(req, res) {
  * ============================================================= */
 async function getTestRequestsByPatientId(req, res) {
   const patientId = parseInt(req.params.id || req.params.patientId, 10);
-  if (isNaN(patientId)) return res.status(400).json({ message: "Invalid Patient ID" });
-
+  if (isNaN(patientId))
+    return res.status(400).json({ message: "Invalid Patient ID" });
   try {
     const { rows } = await pool.query(
-      `
-      SELECT tr.id, tr.status, tr.payment_status, tr.created_at,
-             COALESCE((
-               SELECT STRING_AGG(tc.name, ', ')
-               FROM test_request_items tri
-               JOIN test_catalog tc ON tri.test_catalog_id = tc.id
-               WHERE tri.test_request_id = tr.id AND tri.parent_id IS NULL
-             ), '') AS ordered_tests,
-             COALESCE(p.first_name, 'Unknown') AS patient_first_name,
-             COALESCE(p.last_name, 'Patient')  AS patient_last_name,
-             DATE_PART('year', AGE(CURRENT_DATE, p.date_of_birth))::int AS age
-      FROM test_requests tr
-      LEFT JOIN patients p ON tr.patient_id = p.id
-      WHERE tr.patient_id = $1
-      ORDER BY tr.created_at DESC;
-      `,
+      `SELECT
+         tr.id,
+         tr.status,
+         tr.payment_status,
+         tr.priority,                               -- 🔴 include priority
+         tr.created_at,
+         COALESCE(
+           (
+             SELECT STRING_AGG(tc.name, ', ')
+             FROM test_request_items tri
+             JOIN test_catalog tc ON tri.test_catalog_id = tc.id
+             WHERE tri.test_request_id = tr.id
+               AND tri.parent_id IS NULL
+           ),
+           ''
+         ) AS ordered_tests,
+         COALESCE(p.first_name, 'Unknown') AS patient_first_name,
+         COALESCE(p.last_name, 'Patient') AS patient_last_name,
+         DATE_PART('year', AGE(CURRENT_DATE, p.date_of_birth))::int AS age
+       FROM test_requests tr
+       LEFT JOIN patients p ON tr.patient_id = p.id
+       WHERE tr.patient_id = $1
+       ORDER BY tr.created_at DESC`,
       [patientId]
     );
-
     res.json(rows);
   } catch (err) {
     console.error("❌ getTestRequestsByPatientId:", err.message);
-    res.status(500).json({ message: "Server error fetching patient's test requests" });
+    res.status(500).json({ message: "Server error" });
   }
 }
 
 /* =============================================================
- * CREATE TEST REQUEST
+ * CREATE TEST REQUEST  🚨 (priority-aware)
  * ============================================================= */
 async function createTestRequest(req, res) {
-  const { patientId, testIds } = req.body;
+  const { patientId, testIds, priority } = req.body;
   const userId = req.user?.id || null;
-  const userName = req.user?.full_name || "System";
 
   if (!patientId || !Array.isArray(testIds) || testIds.length === 0) {
-    return res.status(400).json({ message: "Select at least one test or panel" });
+    return res.status(400).json({ message: "Select tests" });
+  }
+
+  // 🔎 Normalize priority -> 'URGENT' or 'Routine'
+  let dbPriority = "Routine";
+  if (priority) {
+    const p = String(priority).trim().toUpperCase();
+    if (["URGENT", "STAT", "EMERG", "EMERGENCY"].includes(p)) {
+      dbPriority = "URGENT";
+    }
   }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    const { rows: patientRows } = await client.query(
-      `SELECT ward_id, referring_doctor FROM patients WHERE id = $1`,
+    const { rows: pRows } = await client.query(
+      `SELECT ward_id, referring_doctor
+       FROM patients
+       WHERE id = $1`,
       [patientId]
     );
-    if (!patientRows.length) throw new Error("Patient not found for test request.");
-    const wardId = patientRows[0].ward_id || null;
-    const referringDoctor = patientRows[0].referring_doctor || null;
+    if (!pRows.length) throw new Error("Patient not found");
 
+    // 👉 priority now explicitly stored in test_requests
     const { rows: hdr } = await client.query(
-      `
-      INSERT INTO test_requests (
-        patient_id, status, payment_status, created_by, ward_id, referring_doctor
-      ) VALUES ($1, 'Pending', 'Unpaid', $2, $3, $4)
-      RETURNING id;
-      `,
-      [patientId, userId, wardId, referringDoctor]
+      `INSERT INTO test_requests
+         (patient_id, status, payment_status, created_by, ward_id, referring_doctor, priority)
+       VALUES
+         ($1, 'Pending', 'Unpaid', $2, $3, $4, $5)
+       RETURNING id, priority`,
+      [patientId, userId, pRows[0].ward_id, pRows[0].referring_doctor, dbPriority]
     );
     const requestId = hdr[0].id;
 
     const { rows: catalogTests } = await client.query(
-      `SELECT id, name, is_panel, COALESCE(price,0) AS price FROM test_catalog WHERE id = ANY($1::int[])`,
+      `SELECT id, name, is_panel, COALESCE(price,0) AS price
+       FROM test_catalog
+       WHERE id = ANY($1::int[])`,
       [testIds]
     );
 
@@ -180,30 +243,34 @@ async function createTestRequest(req, res) {
 
     for (const t of catalogTests) {
       totalCost += Number(t.price) || 0;
+
       const { rows: ins } = await client.query(
-        `INSERT INTO test_request_items (test_request_id, test_catalog_id, status)
-         VALUES ($1,$2,'Pending') RETURNING id`,
+        `INSERT INTO test_request_items
+           (test_request_id, test_catalog_id, status)
+         VALUES ($1,$2,'Pending')
+         RETURNING id`,
         [requestId, t.id]
       );
+
       if (t.is_panel && ins.length) {
         panels.push({ parent_item_id: ins[0].id, panel_id: t.id });
       }
     }
 
+    // Add analytes for panels
     for (const p of panels) {
       const { rows: analytes } = await client.query(
-        `
-        SELECT tc.id AS analyte_id, COALESCE(tc.price,0) AS price
-        FROM test_panel_analytes tpa
-        JOIN test_catalog tc ON tc.id = tpa.analyte_id
-        WHERE tpa.panel_id = $1;
-        `,
+        `SELECT tc.id AS analyte_id
+         FROM test_panel_analytes tpa
+         JOIN test_catalog tc ON tc.id = tpa.analyte_id
+         WHERE tpa.panel_id = $1`,
         [p.panel_id]
       );
 
       for (const a of analytes) {
         await client.query(
-          `INSERT INTO test_request_items (test_request_id, test_catalog_id, parent_id, status)
+          `INSERT INTO test_request_items
+             (test_request_id, test_catalog_id, parent_id, status)
            VALUES ($1,$2,$3,'Pending')`,
           [requestId, a.analyte_id, p.parent_item_id]
         );
@@ -211,59 +278,65 @@ async function createTestRequest(req, res) {
     }
 
     await client.query(
-      `UPDATE test_requests SET payment_amount = $1 WHERE id = $2`,
+      `UPDATE test_requests
+       SET payment_amount = $1
+       WHERE id = $2`,
       [totalCost, requestId]
     );
-
-    // await logAudit(client, userId, userName, "CREATE", "TestRequest", requestId, { ... });
 
     await client.query("COMMIT");
 
     res.status(201).json({
       success: true,
-      message: "✅ Test request created successfully",
+      message: "✅ Created",
       request_id: requestId,
       total: totalCost,
+      priority: dbPriority,
     });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("❌ createTestRequest:", err.message);
-    res.status(500).json({ message: "Server error creating test request: " + err.message });
+    res.status(500).json({ message: "Server error" });
   } finally {
     client.release();
   }
 }
 
 /* =============================================================
- * GET SINGLE REQUEST (header + items)
+ * GET SINGLE REQUEST (Admin)
  * ============================================================= */
 async function getTestRequestById(req, res) {
-  // This function is fine, it's for viewing the *details* of a request,
-  // not for entering results. We'll leave it as is.
   const { id } = req.params;
   try {
     const header = await pool.query(
-      `SELECT tr.*, p.first_name, p.last_name, p.gender, p.date_of_birth
+      `SELECT tr.*,
+              p.first_name,
+              p.last_name,
+              p.gender,
+              p.date_of_birth
        FROM test_requests tr
        LEFT JOIN patients p ON tr.patient_id = p.id
        WHERE tr.id = $1`,
       [id]
     );
-    if (!header.rows.length) return res.status(404).json({ message: "Request not found" });
+    if (!header.rows.length)
+      return res.status(404).json({ message: "Not found" });
 
     const items = await pool.query(
-      `SELECT tri.id AS item_id, tri.parent_id,
-              tc.id AS test_id, tc.name AS test_name,
+      `SELECT tri.id AS item_id,
+              tri.parent_id,
+              tc.id AS test_id,
+              tc.name AS test_name,
               COALESCE(tc.is_panel, FALSE) AS is_panel,
-              d.name AS department, COALESCE(tc.price,0) AS price
+              d.name AS department,
+              COALESCE(tc.price,0) AS price
        FROM test_request_items tri
-       LEFT JOIN test_catalog  tc ON tri.test_catalog_id = tc.id
-       LEFT JOIN departments   d  ON tc.department_id = d.id
+       LEFT JOIN test_catalog tc ON tri.test_catalog_id = tc.id
+       LEFT JOIN departments d ON tc.department_id = d.id
        WHERE tri.test_request_id = $1
        ORDER BY tri.parent_id NULLS FIRST, tri.id`,
       [id]
     );
-
     res.json({ ...header.rows[0], items: items.rows });
   } catch (err) {
     console.error("❌ getTestRequestById:", err.message);
@@ -272,54 +345,58 @@ async function getTestRequestById(req, res) {
 }
 
 /* =============================================================
- * RESULT ENTRY (for a request)
- * ✅ **FIX**: Now filtered by user's department
+ * 🔬 RESULT ENTRY (Strict ID-Based Isolation + DEBUG)
  * ============================================================= */
 async function getResultEntry(req, res) {
   const requestId = parseInt(req.params.id, 10);
   if (isNaN(requestId)) return res.status(400).json({ message: "Invalid ID" });
 
-  // ✅ 1. Get user's department and Super Admin status
-  const { department: userDepartment, permissions_map } = req.user;
+  const { department: userDeptId, permissions_map, full_name } = req.user;
   const isSuperAdmin = permissions_map?.["*:*"] === true;
+
+  console.log("🛡️ SECURITY AUDIT [getResultEntry]");
+  console.log(`👤 User: ${full_name} (Dept ID: ${userDeptId})`);
+  console.log(`👑 Is SuperAdmin: ${isSuperAdmin}`);
 
   const client = await pool.connect();
   try {
     const { rows: hdr } = await client.query(
-      `SELECT p.gender, DATE_PART('year', AGE(CURRENT_DATE, p.date_of_birth))::int AS age_years
+      `SELECT p.gender,
+              DATE_PART('year', AGE(CURRENT_DATE, p.date_of_birth))::int AS age_years
        FROM test_requests tr
        JOIN patients p ON tr.patient_id = p.id
        WHERE tr.id = $1`,
       [requestId]
     );
-
-    if (!hdr.length) {
+    if (!hdr.length)
       return res.status(404).json({ message: "Request not found." });
-    }
+    const { gender, age_years } = hdr[0];
 
-    const gender = hdr[0]?.gender || null;
-    const ageYears = hdr[0]?.age_years || null;
-
-    // ✅ 2. Build dynamic department filter
     const params = [requestId];
     let deptFilterQuery = "";
+
     if (!isSuperAdmin) {
-      if (!userDepartment) {
-        // If user has no department, they can't see any departmental tests
-        return res.status(403).json({ message: "Permission denied: You are not assigned to a department." });
+      if (!userDeptId) {
+        console.log("❌ BLOCKED: User has no department ID.");
+        return res
+          .status(403)
+          .json({ message: "Access denied: No department assigned." });
       }
-      params.push(userDepartment);
-      deptFilterQuery = ` AND d.name = $${params.length} `;
+      params.push(userDeptId);
+      deptFilterQuery = ` AND tc.department_id = $${params.length} `;
     }
 
-    // ✅ 3. Apply department filter to the SQL query
     const { rows: items } = await client.query(
-      `SELECT tri.id AS request_item_id, tri.parent_id,
-              tc.id AS test_id, tc.name AS test_name,
+      `SELECT tri.id AS request_item_id,
+              tri.parent_id,
+              tc.id AS test_id,
+              tc.name AS test_name,
               COALESCE(tc.is_panel,false) AS is_panel,
               d.name AS department_name,
-              u.unit_name,
-              tri.result_value, tri.status
+              u.symbol AS unit_symbol,
+              tri.result_value,
+              tri.status,
+              tc.department_id
        FROM test_request_items tri
        JOIN test_catalog tc ON tc.id = tri.test_catalog_id
        LEFT JOIN departments d ON d.id = tc.department_id
@@ -327,31 +404,44 @@ async function getResultEntry(req, res) {
        WHERE tri.test_request_id = $1
        ${deptFilterQuery}
        ORDER BY tri.parent_id NULLS FIRST, tc.name`,
-      params // Use the dynamic params list
+      params
     );
 
-    if (!items.length) {
-      // This is not an error. It just means this user has no tests for this request.
-      return res.json({ request_id: requestId, items: [] });
-    }
+    console.log(`📊 Items Found: ${items.length}`);
+
+    if (!items.length) return res.json({ request_id: requestId, items: [] });
 
     const panels = {};
     const general = [];
 
     for (const item of items) {
-      if (item.is_panel && !item.parent_id) panels[item.request_item_id] = { ...item, analytes: [] };
-    }
-
-    for (const item of items) {
-      const ref = await getSmartRefRange(client, item.test_id, gender, ageYears);
-      if (item.parent_id && panels[item.parent_id]) {
-        panels[item.parent_id].analytes.push({ ...item, ref_range: ref });
-      } else if (!item.is_panel && !item.parent_id) {
-        general.push({ ...item, ref_range: ref, analytes: [] });
+      if (item.is_panel && !item.parent_id) {
+        panels[item.request_item_id] = { ...item, analytes: [] };
       }
     }
 
-    res.json({ request_id: requestId, items: [...general, ...Object.values(panels)] });
+    for (const item of items) {
+      const details = await getSmartRefDetails(
+        client,
+        item.test_id,
+        item.result_value,
+        gender,
+        age_years
+      );
+      item.ref_range = details.text;
+      item.flag = details.flag;
+
+      if (item.parent_id && panels[item.parent_id]) {
+        panels[item.parent_id].analytes.push(item);
+      } else if (!item.is_panel && !item.parent_id) {
+        general.push(item);
+      }
+    }
+
+    res.json({
+      request_id: requestId,
+      items: [...general, ...Object.values(panels)],
+    });
   } catch (err) {
     console.error("❌ getResultEntry:", err.message);
     res.status(500).json({ message: "Server error" });
@@ -361,72 +451,84 @@ async function getResultEntry(req, res) {
 }
 
 /* =============================================================
- * SAVE RESULTS
- * ✅ **FIX**: Now protected by user's department
+ * 💾 SAVE RESULTS (Strict Write Protection + DEBUG)
  * ============================================================= */
 async function saveResultEntry(req, res) {
   const requestId = parseInt(req.params.id, 10);
   const { results } = req.body;
-  
-  // ✅ 1. Get user's department and Super Admin status
-  const { department: userDepartment, permissions_map } = req.user;
+  const { department: userDeptId, permissions_map, full_name } = req.user;
   const isSuperAdmin = permissions_map?.["*:*"] === true;
 
   if (!Array.isArray(results) || !results.length)
     return res.status(400).json({ message: "Results required" });
 
+  console.log("🛡️ SECURITY AUDIT [saveResultEntry]");
+  console.log(`👤 User: ${full_name} (Dept ID: ${userDeptId})`);
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // ✅ 2. --- DEPARTMENTAL SECURITY CHECK ---
     if (!isSuperAdmin) {
-      if (!userDepartment) {
-        throw new Error("Permission denied: You are not assigned to any department.");
-      }
-      
-      const itemIds = results.map(r => r.request_item_id);
+      if (!userDeptId)
+        throw new Error("Permission denied: No department assigned.");
 
-      // Check how many of the submitted items are valid for this user's dept
+      const itemIds = results.map((r) => r.request_item_id);
+
       const { rows } = await client.query(
         `SELECT COUNT(tri.id)::int AS count
          FROM test_request_items tri
          JOIN test_catalog tc ON tri.test_catalog_id = tc.id
-         JOIN departments d ON tc.department_id = d.id
-         WHERE tri.id = ANY($1::int[]) AND d.name = $2`,
-        [itemIds, userDepartment]
+         WHERE tri.id = ANY($1::int[])
+           AND tc.department_id = $2`,
+        [itemIds, userDeptId]
       );
 
-      // If the count of valid items doesn't match the total items they sent,
-      // they are trying to save an item from another department. Block the entire save.
-      if (rows[0].count !== itemIds.length) {
-        throw new Error("Permission denied: You are attempting to save results for an item outside your assigned department.");
-      }
-    }
-    // ✅ --- END SECURITY CHECK ---
+      console.log(`🔒 Verified Items: ${rows[0].count} / ${itemIds.length}`);
 
-    // 3. Proceed with saving (this is now safe)
+      if (rows[0].count !== itemIds.length)
+        throw new Error(
+          "Security violation: You are attempting to save results outside your department."
+        );
+    }
+
     for (const r of results) {
       await client.query(
         `UPDATE test_request_items
-         SET result_value = $1, status = 'Completed', updated_at = NOW()
-         WHERE id = $2 AND test_request_id = $3`,
+         SET result_value = $1,
+             status = 'Completed',
+             updated_at = NOW()
+         WHERE id = $2
+           AND test_request_id = $3`,
         [r.value, r.request_item_id, requestId]
       );
     }
 
-    // This query is fine, it just updates the main request status
-    await client.query(`UPDATE test_requests SET status = 'Completed' WHERE id = $1`, [requestId]);
-    
+    await client.query(
+      `UPDATE test_requests
+       SET status = 'Completed'
+       WHERE id = $1
+         AND (
+           SELECT COUNT(*)
+           FROM test_request_items
+           WHERE test_request_id = $1
+             AND status NOT IN ('Completed', 'Verified', 'Cancelled')
+         ) = 0`,
+      [requestId]
+    );
+
     await client.query("COMMIT");
     res.json({ message: "✅ Results saved" });
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("❌ saveResultEntry:", err.message);
-    // Send a 403 (Forbidden) if it was our custom permission error
-    if (err.message.startsWith("Permission denied")) {
-        return res.status(403).json({ message: err.message });
+    if (
+      err.message.startsWith("Security violation") ||
+      err.message.startsWith("Permission")
+    ) {
+      console.log("⛔ BLOCKED SAVE ATTEMPT");
+      return res.status(403).json({ message: err.message });
     }
+    console.error("❌ saveResultEntry:", err.message);
     res.status(500).json({ message: "Server error" });
   } finally {
     client.release();
@@ -434,53 +536,139 @@ async function saveResultEntry(req, res) {
 }
 
 /* =============================================================
- * VERIFY RESULTS
+ * VERIFY RESULTS (Strict ID-Based)
  * ============================================================= */
 async function verifyResults(req, res) {
-  // We can add department checks here too if needed,
-  // but for now, we'll assume the 'pathology:verify' permission is enough.
   const requestId = parseInt(req.params.id, 10);
   const { action } = req.body;
-  const verifierId = req.user?.id || null;
-  const verifierName = req.user?.full_name || "Verifier";
+  const {
+    id: userId,
+    full_name: userName,
+    department: userDeptId,
+    permissions_map,
+    role_name,
+    roles,
+  } = req.user;
+  const isSuperAdmin = permissions_map?.["*:*"] === true;
+
+  const userRoles = (roles || []).map((r) => r.toLowerCase());
+  if (role_name) userRoles.push(role_name.toLowerCase());
+  const isSeniorStaff = userRoles.some(
+    (r) =>
+      r.includes("admin") ||
+      r.includes("pathologist") ||
+      r.includes("scientist") ||
+      r.includes("hematologist")
+  );
+
+  if (!isSuperAdmin && !isSeniorStaff)
+    return res.status(403).json({ message: "Permission denied" });
 
   if (!["verify", "reject"].includes(action))
     return res.status(400).json({ message: "Invalid action" });
 
   const newStatus = action === "verify" ? "Verified" : "Cancelled";
+  const client = await pool.connect();
 
   try {
-    await pool.query(
-      `UPDATE test_request_items
-       SET verified_by = $1, verified_name = $2, verified_at = NOW(), status = $3
-       WHERE test_request_id = $4`,
-      [verifierId, verifierName, newStatus, requestId]
+    await client.query("BEGIN");
+    let updateQuery;
+    let queryParams;
+
+    if (isSuperAdmin) {
+      updateQuery = `
+        UPDATE test_request_items
+        SET verified_by = $1,
+            verified_name = $2,
+            verified_at = NOW(),
+            status = $3
+        WHERE test_request_id = $4
+      `;
+      queryParams = [userId, userName, newStatus, requestId];
+    } else {
+      if (!userDeptId) throw new Error("Department required.");
+
+      updateQuery = `
+        UPDATE test_request_items tri
+        SET verified_by = $1,
+            verified_name = $2,
+            verified_at = NOW(),
+            status = $3
+        FROM test_catalog tc
+        WHERE tri.test_catalog_id = tc.id
+          AND tc.department_id = $5
+          AND tri.test_request_id = $4
+      `;
+      queryParams = [userId, userName, newStatus, requestId, userDeptId];
+    }
+
+    const result = await client.query(updateQuery, queryParams);
+
+    await client.query(
+      `UPDATE test_requests
+       SET status = $1
+       WHERE id = $2
+         AND (
+           SELECT COUNT(*)
+           FROM test_request_items
+           WHERE test_request_id = $2
+             AND status != $1
+         ) = 0`,
+      [newStatus, requestId]
     );
 
-    await pool.query(`UPDATE test_requests SET status = $1 WHERE id = $2`, [newStatus, requestId]);
-
-    res.json({ success: true, message: `Results ${newStatus.toLowerCase()}` });
+    await client.query("COMMIT");
+    res.json({ success: true, message: `Processed ${result.rowCount} items.` });
   } catch (err) {
+    await client.query("ROLLBACK");
     console.error("❌ verifyResults:", err.message);
     res.status(500).json({ message: "Server error" });
+  } finally {
+    client.release();
   }
 }
 
 /* =============================================================
- * UPDATE REQUEST STATUS
+ * UPDATE REQUEST STATUS (Releasing)
  * ============================================================= */
 async function updateTestRequestStatus(req, res) {
   const { id } = req.params;
   const { status } = req.body;
+  if (!status) return res.status(400).json({ message: "Status required" });
 
-  if (!status) return res.status(400).json({ message: "Status is required" });
+  const { permissions_map, role_name, roles } = req.user;
+  const isSuperAdmin = permissions_map?.["*:*"] === true;
+
+  if (["Released", "Verified"].includes(status)) {
+    const userRoles = (roles || []).map((r) => r.toLowerCase());
+    if (role_name) userRoles.push(role_name.toLowerCase());
+    const isAuthorized =
+      isSuperAdmin ||
+      userRoles.some(
+        (r) =>
+          r.includes("admin") ||
+          r.includes("pathologist") ||
+          r.includes("scientist") ||
+          r.includes("hematologist") ||
+          r.includes("manager") ||
+          r.includes("director")
+      );
+    if (!isAuthorized) {
+      return res.status(403).json({
+        message: `Permission denied: You cannot set status to ${status}.`,
+      });
+    }
+  }
 
   try {
-    await pool.query(`UPDATE test_requests SET status = $1 WHERE id = $2`, [status, id]);
+    await pool.query(`UPDATE test_requests SET status = $1 WHERE id = $2`, [
+      status,
+      id,
+    ]);
     res.json({ success: true, message: `Status updated to ${status}` });
   } catch (err) {
     console.error("❌ updateTestRequestStatus:", err.message);
-    res.status(500).json({ message: "Server error updating status" });
+    res.status(500).json({ message: "Server error" });
   }
 }
 
@@ -490,26 +678,46 @@ async function updateTestRequestStatus(req, res) {
 async function processPayment(req, res) {
   const { id } = req.params;
   const { amount, paymentMethod } = req.body;
-
   if (amount == null || !paymentMethod)
-    return res.status(400).json({ message: "Amount and payment method required" });
+    return res.status(400).json({ message: "Missing data" });
 
+  const client = await pool.connect();
   try {
+    await client.query("BEGIN");
+    const cur = await pool.query(
+      `SELECT status FROM test_requests WHERE id = $1`,
+      [id]
+    );
+    if (!cur.rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Not found" });
+    }
+
+    const newStatus =
+      cur.rows[0].status === "Pending"
+        ? "SampleReceived"
+        : cur.rows[0].status;
+
     await pool.query(
       `UPDATE test_requests
        SET payment_status = 'Paid',
            payment_amount = $1,
            payment_method = $2,
-           payment_date   = NOW(),
-           status         = 'Pending'
+           payment_date = NOW(),
+           status = $4,
+           updated_at = NOW()
        WHERE id = $3`,
-      [amount, paymentMethod, id]
+      [amount, paymentMethod, id, newStatus]
     );
 
-    res.json({ success: true, message: "✅ Payment processed", status: "Pending" });
+    await client.query("COMMIT");
+    res.json({ success: true, status: newStatus });
   } catch (err) {
+    await client.query("ROLLBACK");
     console.error("❌ processPayment:", err.message);
-    res.status(500).json({ message: "Server error processing payment" });
+    res.status(500).json({ message: "Server error" });
+  } finally {
+    client.release();
   }
 }
 

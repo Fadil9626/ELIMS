@@ -1,5 +1,6 @@
 // src/services/departmentService.js
-import { apiFetch } from './apiFetch'; // Assuming you have a shared apiFetch wrapper
+import apiFetch from "./apiFetch";       
+ // Assuming you have a shared apiFetch wrapper
 
 const API_URL = '/api/departments';
 

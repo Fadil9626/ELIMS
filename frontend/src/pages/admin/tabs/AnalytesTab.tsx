@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { motion } from "framer-motion";
 import {
   Activity,
@@ -14,24 +14,15 @@ import {
   Settings,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import labConfigService from "../../../services/labConfigService";
+import apiFetch from "../../../services/apiFetch"; // 🚀 1. Import apiFetch
 
-const getToken = () => {
-  try {
-    const raw = localStorage.getItem("userInfo");
-    if (!raw) return "";
-    const parsed = raw.startsWith("{") ? JSON.parse(raw) : { token: raw };
-    return parsed?.token || parsed?.me?.token || "";
-  } catch {
-    return "";
-  }
-};
+// 🚀 2. REMOVED the old, broken getToken() function
 
 // ============================================================
 // 🔢 Normal Ranges Panel
 // ============================================================
 const NormalRangesTab = ({ analyteId }: { analyteId: number }) => {
-  const token = getToken();
+  // 🚀 3. REMOVED manual token
   const [ranges, setRanges] = useState<any[]>([]);
   const [newRange, setNewRange] = useState({
     range_type: "numeric",
@@ -45,16 +36,20 @@ const NormalRangesTab = ({ analyteId }: { analyteId: number }) => {
     range_label: "",
   });
 
+  const loadRanges = useCallback(async () => {
+    try {
+      // 🚀 4. Use apiFetch
+      // ✅ FIXED: Changed 'analytes' to 'tests' to match backend route
+      const res = await apiFetch(`/api/lab-config/tests/${analyteId}/ranges`);
+      setRanges(res?.data || res || []);
+    } catch {
+      toast.error("Failed to load ranges");
+    }
+  }, [analyteId]);
+
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await labConfigService.getNormalRanges(analyteId, token);
-        setRanges(res?.data || res || []);
-      } catch {
-        toast.error("Failed to load ranges");
-      }
-    })();
-  }, [analyteId, token]);
+    loadRanges();
+  }, [loadRanges]);
 
   const handleAddRange = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,9 +61,13 @@ const NormalRangesTab = ({ analyteId }: { analyteId: number }) => {
         min_value: newRange.min_value ? Number(newRange.min_value) : null,
         max_value: newRange.max_value ? Number(newRange.max_value) : null,
       };
-      await labConfigService.createNormalRange(analyteId, payload, token);
-      const res = await labConfigService.getNormalRanges(analyteId, token);
-      setRanges(res?.data || res || []);
+      // 🚀 4. Use apiFetch
+      // ✅ FIXED: Changed 'analytes' to 'tests' to match backend route
+      await apiFetch(`/api/lab-config/tests/${analyteId}/ranges`, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      loadRanges(); // Refresh
       setNewRange({
         range_type: "numeric",
         gender: "Any",
@@ -89,7 +88,11 @@ const NormalRangesTab = ({ analyteId }: { analyteId: number }) => {
   const handleDelete = async (id: number) => {
     if (!window.confirm("Delete this range?")) return;
     try {
-      await labConfigService.deleteNormalRange(id, token);
+      // 🚀 4. Use apiFetch
+      // (Assuming a RESTful route for deleting a specific range)
+      await apiFetch(`/api/lab-config/ranges/${id}`, {
+        method: 'DELETE'
+      });
       setRanges((prev) => prev.filter((r) => r.id !== id));
       toast.success("🗑️ Range deleted");
     } catch {
@@ -210,15 +213,17 @@ export default function AnalytesTab() {
   const [form, setForm] = useState({ name: "", description: "" });
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedDept, setSelectedDept] = useState("All");
-  const token = getToken();
+  
+  // 🚀 3. REMOVED manual token
 
   useEffect(() => {
     (async () => {
       try {
         setLoading(true);
+        // 🚀 4. Use apiFetch
         const [aRes, dRes] = await Promise.all([
-          labConfigService.getAnalytes(token),
-          labConfigService.getDepartments(token),
+          apiFetch("/api/lab-config/tests"), // This was /api/lab-config/tests 401
+          apiFetch("/api/departments"),     // This was /api/departments 401
         ]);
         const list = (Array.isArray(aRes) ? aRes : (aRes as any)?.data || []).map((a: any) => ({
           ...a,
@@ -233,7 +238,7 @@ export default function AnalytesTab() {
         setLoading(false);
       }
     })();
-  }, [token]);
+  }, []); // 🚀 5. REMOVED token dependency
 
   const filtered = useMemo(
     () =>
@@ -261,16 +266,23 @@ export default function AnalytesTab() {
     e.preventDefault();
     if (!form.name.trim()) return toast.error("Name required");
     try {
+      // 🚀 6. Use apiFetch
       if (editing) {
-        await labConfigService.updateAnalyte(editing.id, form as any, token);
+        await apiFetch(`/api/lab-config/analytes/${editing.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(form)
+        });
         toast.success("Analyte updated");
       } else {
-        await labConfigService.createAnalyte(form, token);
+        await apiFetch("/api/lab-config/analytes", {
+          method: 'POST',
+          body: JSON.stringify(form)
+        });
         toast.success("Analyte added");
       }
       setShowModal(false);
-      const aRes = await labConfigService.getAnalytes(token);
-      setAnalytes(aRes?.data || aRes || []);
+      const aRes = await apiFetch("/api/lab-config/tests");
+      setAnalytes(Array.isArray(aRes) ? aRes : (aRes as any)?.data || []);
     } catch (err: any) {
       toast.error(err.message || "Failed to save");
     }
@@ -279,7 +291,10 @@ export default function AnalytesTab() {
   const handleDelete = async (id: number) => {
     if (!window.confirm("Delete analyte?")) return;
     try {
-      await labConfigService.deleteAnalyte(id, token);
+      // 🚀 6. Use apiFetch
+      await apiFetch(`/api/lab-config/analytes/${id}`, {
+        method: 'DELETE'
+      });
       toast.success("Deleted");
       setAnalytes((prev) => prev.filter((x) => x.id !== id));
     } catch (err: any) {

@@ -13,7 +13,9 @@ const MODULE = "settings";
 
 router
   .route("/")
-  .get(protect, authorize(MODULE, "view"), getDepartments)
+  // ✅ FIX: Removed 'authorize' for GET. 
+  // Now any logged-in user can see departments (required for dropdowns).
+  .get(protect, getDepartments) 
   .post(protect, authorize(MODULE, "edit"), createDepartment);
 
 router

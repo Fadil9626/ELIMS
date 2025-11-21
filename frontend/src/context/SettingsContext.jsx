@@ -1,62 +1,96 @@
-// frontend/src/context/SettingsContext.jsx
+// ============================================================================
+// SETTINGS CONTEXT (FINAL VERSION)
+// Central storage for all system settings
+// Supports: lab profile, branding, legal text, misc system settings
+// ============================================================================
+
 import React, { createContext, useCallback, useEffect, useState } from "react";
 import settingsService from "../services/settingsService";
+import { useAuth } from "./AuthContext";
 
 export const SettingsContext = createContext();
 
 export const SettingsProvider = ({ children }) => {
-  const [settings, setSettings] = useState(null);   // lab profile + legacy map
+  const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
 
-  const token = (() => {
-    try { return JSON.parse(localStorage.getItem("userInfo"))?.token || null; }
-    catch { return null; }
-  })();
+  const { token, loading: authLoading } = useAuth();
 
+  // --------------------------------------------------------------------------
+  // LOAD ALL SETTINGS
+  // --------------------------------------------------------------------------
   const load = useCallback(async () => {
-    try {
-      if (!token) { setSettings({}); return; }
-      // load v2 lab profile
-      const profile = await settingsService.getLabProfile(token);
-      // also load legacy map for any old screens
-      const legacy = await settingsService.getSettings(token).catch(() => ({}));
-      setSettings({ ...legacy, ...profile });
-    } catch (e) {
-      console.error("Settings load failed:", e);
+    if (authLoading) return;
+
+    // Not logged in → blank
+    if (!token) {
       setSettings({});
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      // Fetch everything from backend
+      const sys = await settingsService.getSettings();             // key/value system settings
+      const profile = await settingsService.getLabProfile().catch(() => ({})); // lab profile fallback
+
+      // Merge both
+      setSettings({ ...sys, ...profile });
+    } catch (err) {
+      console.error("⚠️ Settings load failed:", err.message);
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, authLoading]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  // Save profile (name/address/phone/email/logo_url)
-  const saveProfile = async (payload) => {
-    if (!token) throw new Error("No token");
-    const res = await settingsService.saveLabProfile(payload, token);
-    await load();
-    return res;
-  };
+  // --------------------------------------------------------------------------
+  // CONTEXT ACTIONS
+  // --------------------------------------------------------------------------
 
-  // Upload logo -> returns {logo_url}, then persist into profile
-  const uploadLogo = async (file) => {
-    if (!token) throw new Error("No token");
-    const { logo_url } = await settingsService.uploadLabLogo(file, token);
-    await saveProfile({ logo_url });
-    return { logo_url };
-  };
-
-  // legacy batch update (optional)
+  // Generic settings updater (used by ReportCustomizer.jsx)
   const updateSettings = async (kv) => {
-    if (!token) throw new Error("No token");
-    await settingsService.updateSettings(kv, token);
+    await settingsService.updateSettingsValues(kv);
     await load();
   };
 
+  // Update text-only settings (alias to updateSettings)
+  const updateTextSettings = async (kv) => {
+    await settingsService.updateSettingsValues(kv);
+    await load();
+  };
+
+  // Save Lab profile (Name, Address, Phone, Email)
+  const saveLabProfile = async (payload) => {
+    await settingsService.updateLabProfile(payload);
+    await load();
+  };
+
+  // Reload everything on demand
+  const reloadSettings = load;
+
+  // --------------------------------------------------------------------------
+  // PROVIDER
+  // --------------------------------------------------------------------------
   return (
-    <SettingsContext.Provider value={{ settings, loading, saveProfile, uploadLogo, updateSettings }}>
-      {!loading && children}
+    <SettingsContext.Provider
+      value={{
+        settings,
+        loading,
+
+        // FUNCTIONS AVAILABLE TO ALL COMPONENTS
+        updateSettings,        // <–– REQUIRED BY ReportCustomizer.jsx
+        updateTextSettings,    
+        saveLabProfile,
+        reloadSettings,
+      }}
+    >
+      {!loading && !authLoading && children}
     </SettingsContext.Provider>
   );
 };

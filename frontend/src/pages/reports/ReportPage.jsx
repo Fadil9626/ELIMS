@@ -1,51 +1,60 @@
-import React, { useState, useEffect, useContext, Fragment } from "react";
+import React, { useState, useEffect, Fragment } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Printer } from "lucide-react";
-import reportService from "../../services/reportService";
-import userService from "../../services/userService";
-import { SettingsContext } from "../../context/SettingsContext";
-import { useAuth } from "../../context/AuthContext";
+import { ArrowLeft, Printer, RefreshCw, AlertCircle } from "lucide-react";
+import Barcode from "react-barcode"; 
 
-/* ------------------------------- helpers ------------------------------- */
-const fmt = (v, d = 2) =>
-  v === null || v === undefined || v === "" || Number.isNaN(Number(v))
-    ? ""
-    : Number(v).toFixed(d);
+// ==================================================================
+// 🔧 INTERNAL UTILITIES
+// ==================================================================
 
-const FlagCell = ({ flag }) => {
-  if (!flag) return <span />;
-  const cls =
-    flag === "H"
-      ? "text-red-600 font-semibold"
-      : flag === "L"
-      ? "text-orange-600 font-semibold"
-      : "text-gray-700";
-  return <span className={cls}>{flag}</span>;
+// Adjust if your API runs on a different port in dev/prod
+const API_BASE = "http://localhost:5000";
+
+const apiFetch = async (url, options = {}) => {
+  let token = "";
+  try {
+    const raw = localStorage.getItem("elims_auth_v1");
+    if (raw) token = JSON.parse(raw)?.token || "";
+  } catch (e) {}
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    ...(options.body ? { "Content-Type": "application/json" } : {}),
+    ...(options.headers || {}),
+  };
+
+  const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`;
+
+  const res = await fetch(fullUrl, { ...options, headers });
+  const text = await res.text();
+
+  if (!res.ok) throw new Error(`API Error: ${res.status}`);
+  try { return text ? JSON.parse(text) : {}; } catch { return text; }
 };
 
-// Fallback: map legacy result_data -> rows (Only used if analytes array is empty)
-const fallbackRowsFromResultData = (result_data = {}) => {
-  try {
-    const obj =
-      typeof result_data === "string" ? JSON.parse(result_data) : result_data;
-    return Object.keys(obj).map((k) => {
-      const e = obj[k] || {};
-      return {
-        analyte_id: Number(k),
-        analyte_name: e.analyte_name || `#${k}`,
-        value: e.value ?? "",
-        unit: e.unit ?? "",
-        ref_low: e.ref_low ?? null,
-        ref_high: e.ref_high ?? null,
-        flag: e.flag ?? "",
-        note: e.note ?? "",
-        decimals: e.decimals ?? 2,
-      };
-    });
-  } catch {
-    return [];
+const reportService = {
+  getReportByRequestId: async (requestId) => {
+    return apiFetch(`/api/reports/request/${requestId}`);
+  },
+  getLabSettings: async () => {
+    return apiFetch(`/api/settings/lab-profile`);
   }
 };
+
+const useAuthInternal = () => {
+    const [user, setUser] = useState(null);
+    useEffect(() => {
+      try {
+        const raw = localStorage.getItem("elims_auth_v1");
+        if (raw) setUser(JSON.parse(raw).user);
+      } catch(e) {}
+    }, []);
+    return { user };
+};
+
+// ==================================================================
+// HELPER FUNCTIONS
+// ==================================================================
 
 const calculateAge = (dob) => {
   if (!dob) return "N/A";
@@ -54,418 +63,297 @@ const calculateAge = (dob) => {
   let age = today.getFullYear() - birthDate.getFullYear();
   const m = today.getMonth() - birthDate.getMonth();
   if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) age--;
-  return age;
+  return age + " yrs";
 };
 
-const API_BASE_URL =
-  import.meta.env.VITE_APP_API_URL || "http://localhost:5000";
+const FlagCell = ({ flag }) => {
+  if (!flag) return <span />;
+  const cls =
+    flag === "H" ? "text-red-600 font-bold bg-red-50 px-2 py-0.5 rounded text-xs border border-red-100" : 
+    flag === "L" ? "text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded text-xs border border-blue-100" : 
+    flag === "A" ? "text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded text-xs border border-orange-100" :
+    "text-gray-700";
+  return <span className={cls}>{flag}</span>;
+};
 
-/* ---------------------------------------------------------------------- */
+// ==================================================================
+// COMPONENT
+// ==================================================================
 
 const TestReportPage = () => {
-  const { id: testRequestId } = useParams();
+  const { id } = useParams();
   const navigate = useNavigate();
-  const { settings } = useContext(SettingsContext);
-  const { token } = useAuth();
-
+  
   const [loading, setLoading] = useState(true);
   const [reportData, setReportData] = useState(null);
+  const [settings, setSettings] = useState(null); 
   const [error, setError] = useState(null);
 
-  const [pro, setPro] = useState(null);
-
   useEffect(() => {
-    if (!token) {
-      setError("Not authenticated.");
-      setLoading(false);
-      return;
-    }
-
-    const loadAll = async () => {
-      try {
+    const loadData = async () => {
+        if(!id) return;
         setLoading(true);
-
-        const [rep, prof] = await Promise.allSettled([
-          reportService.getReportByRequestId(testRequestId, token),
-          userService.getProfessionalProfile(token),
-        ]);
-
-        if (rep.status === "fulfilled") {
-          setReportData(rep.value);
-        } else {
-          // 💡 FIX: Access reason safely
-          throw new Error(rep.reason?.message || "Failed to load report");
+        try {
+            const [rpt, cfg] = await Promise.all([
+                reportService.getReportByRequestId(id),
+                reportService.getLabSettings()
+            ]);
+            setReportData(rpt);
+            setSettings(cfg);
+        } catch(e) {
+            console.error(e);
+            setError("Failed to load report data.");
+        } finally {
+            setLoading(false);
         }
-
-        if (prof.status === "fulfilled") {
-          setPro(prof.value);
-        } else {
-          setPro(null);
-        }
-      } catch (e) {
-        setError(e.message);
-      } finally {
-        setLoading(false);
-      }
     };
-
-    loadAll();
-  }, [testRequestId, token]);
+    loadData();
+  }, [id]);
 
   const handlePrint = () => window.print();
 
-  if (loading) return <div className="p-6">Generating Report...</div>;
-  if (error) return <div className="p-6 text-red-500">Error: {error}</div>;
-  if (!reportData) return <div className="p-6">Report data not found.</div>;
+  const getImgUrl = (path) => {
+      if (!path) return null;
+      if (path.startsWith('http')) return path;
+      return `${API_BASE}${path}`; 
+  };
 
-  // 1. Initialize clinical note with main report note (if it exists)
-  let clinicalNote = reportData.clinical_note || '';
-  let analyteNotes = '';
-  
-  // 2. Extract and compile notes from all analytes
-  if (Array.isArray(reportData.items)) {
-    reportData.items.forEach(item => {
-      const rows = Array.isArray(item.analytes) && item.analytes.length > 0
-        ? item.analytes
-        : fallbackRowsFromResultData(item.result_data);
-      
-      rows.forEach(a => {
-        if (a.note && String(a.note).trim() !== '') {
-          // Format the note to include the analyte name
-          analyteNotes += `\n${a.analyte_name || item.test_name}: ${a.note}`;
-        }
-      });
-    });
-  }
+  // Loading & Error States
+  if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-100"><RefreshCw className="w-8 h-8 animate-spin text-blue-600" /></div>;
+  if (error || !reportData) return <div className="p-8 text-center text-red-500 flex flex-col items-center justify-center h-screen"><AlertCircle size={48} className="mb-2"/>{error || "Report not found"}</div>;
 
-  // 3. Combine notes
-  if (analyteNotes) {
-    // Add separator if a main clinical note already exists
-    if (clinicalNote) {
-      clinicalNote += '\n\n--- Individual Item Notes ---';
-    }
-    clinicalNote += analyteNotes;
-  }
-  
+  // Lab Settings
+  const labName = settings?.lab_name || "Medical Laboratory";
+  const labAddress = settings?.lab_address || "";
+  const labPhone = settings?.lab_phone || "";
+  const labEmail = settings?.lab_email || "";
+  const leftLogo = settings?.logo_light || settings?.lab_logo_light;
+  const rightLogo = settings?.logo_dark || settings?.lab_logo_dark;
+  const barcodeValue = `${reportData.patient_lab_id}`;
+
+  // Safety check for new backend structure
+  const reportSections = reportData.sections || [];
+
   return (
-    <>
-      {/* --- COMPACT PRINT STYLES --- */}
+    <div className="min-h-screen bg-gray-100 p-4 md:p-8 font-sans print:p-0 print:bg-white">
+      
+      {/* Print Styles */}
       <style>{`
         @media print {
-          body { background-color: #fff; font-size: 11px; }
-          #report-content { padding: 0 !important; margin: 0 auto !important; }
-          #root > div > main > header, #root > div > aside, .no-print { display: none !important; }
-          @page { size: A4; margin: 10mm 8mm; }
-
-          .panel-card { page-break-inside: avoid !important; break-inside: avoid-page !important; margin-bottom: 5mm !important; }
-          .min-w-full th, .min-w-full td { padding: 4px 8px !important; }
-          .space-y-1 p { margin-bottom: 2px !important; line-height: 1.2 !important; }
-          
-          /* 💡 NEW: Ensure signature fields align in print */
-          .signature-grid > div {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+          @page { margin: 10mm; size: A4; }
+          body * { visibility: hidden; }
+          #report-container, #report-container * { visibility: visible; }
+          #report-container {
+            position: absolute;
+            left: 0; top: 0; width: 100%; margin: 0; padding: 0;
+            box-shadow: none; border: none;
           }
-          .signature-line { width: 90%; border-top: 1px solid #000; padding-top: 2px; text-align: center; }
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .no-print { display: none !important; }
+          .page-break-inside-avoid { break-inside: avoid; page-break-inside: avoid; }
         }
       `}</style>
 
-      <div className="p-6 bg-gray-100 font-sans">
-        {/* Top controls */}
-        {/* ✅ **FIX**: Removed duplicate 'className' attribute */}
-        <div className="flex justify-end items-center mb-6 no-print">
-          <button
-            onClick={() => navigate(-1)}
-            className="flex items-center gap-2 bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600 transition mr-4"
-          >
-            <ArrowLeft className="w-5 h-5" />
-            Go Back
-          </button>
-          <button
-            onClick={handlePrint}
-            className="flex items-center gap-2 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700"
-          >
-            <Printer className="w-5 h-5" />
-            Print Report
-          </button>
-        </div>
-
-        {/* Report body */}
-        <div
-          id="report-content"
-          className="p-8 bg-white max-w-4xl mx-auto shadow-lg"
-        >
-          {/* Header */}
-          <header className="flex items-center justify-between p-4 border-b-2 border-gray-800 mb-4">
-            
-            {/* ✅ PERFORMANCE: Removed cache-busting query string */}
-            {settings.lab_logo_light ? (
-              <img
-                src={`${API_BASE_URL}${settings.lab_logo_light}`}
-                alt="Primary Logo"
-                className="h-20 max-w-[180px] object-contain"
-              />
-            ) : (
-              <div className="h-20 w-24" />
-            )}
-            
-            <div className="text-center mx-4">
-              <p className="font-bold text-2xl uppercase">
-                {settings.lab_name || "Your Lab Name"}
-              </p>
-              <p className="text-sm">
-                {settings.lab_address || "123 Lab Street, Freetown"}
-              </p>
-              <p className="text-sm">
-                Contact: {settings.lab_phone || "+232 76 000 000"} |{" "}
-                {settings.lab_email || "contact@lab.com"}
-              </p>
-            </div>
-
-            {/* ✅ PERFORMANCE: Removed cache-busting query string */}
-            {settings.lab_logo_dark ? (
-              <img
-                src={`${API_BASE_URL}${settings.lab_logo_dark}`}
-                alt="Secondary Logo"
-                className="h-20 max-w-[180px] object-contain"
-              />
-            ) : (
-              <div className="h-20 w-24" />
-            )}
-          </header>
-
-          {/* Patient info */}
-          <section className="grid grid-cols-2 gap-x-8 text-sm mb-4 border-b pb-4">
-            <div className="space-y-1">
-              <p>
-                <strong>PATIENT'S NAME:</strong>{" "}
-                {reportData.patient_full_name || "N/A"}
-              </p>
-              <p>
-                <strong>AGE:</strong> {calculateAge(reportData.date_of_birth)}
-              </p>
-              <p>
-                <strong>SEX:</strong> {reportData.gender || "N/A"}
-              </p>
-              <p>
-                <strong>PHONE:</strong> {reportData.phone || "N/A"}
-              </p>
-              <p>
-                <strong>ADDRESS:</strong> {reportData.address || "N/A"}
-              </p>
-            </div>
-            <div className="space-y-1">
-              <p>
-                <strong>LAB ID:</strong> {reportData.patient_lab_id}
-              </p>
-              <p>
-                <strong>DATE REQUESTED:</strong>{" "}
-                {reportData.report_date
-                  ? new Date(reportData.report_date).toLocaleDateString()
-                  : "—"}
-              </p>
-              <p>
-                <strong>STATUS:</strong> {reportData.report_status || "Completed"}
-              </p>
-              <p>
-                <strong>DATE PRINTED:</strong> {new Date().toLocaleString()}
-              </p>
-            </div>
-          </section>
-
-          {/* Title */}
-          <h2 className="text-center font-bold text-xl mb-2 underline">
-            LABORATORY REPORT
-          </h2>
-
-          {/* Results Table (Combined into a single section) */}
-          <section>
-            {Array.isArray(reportData.items) && reportData.items.length > 0 ? (
-              <div className="border rounded-lg overflow-hidden">
-                <table className="w-full text-sm border-collapse min-w-full">
-                  
-                  {/* Global Table Header (Global Analyte Header) */}
-                  <thead>
-                    <tr className="bg-gray-100">
-                      {/* 💡 FIX: Adjusted widths and order */}
-                      <th className="text-left px-4 py-2 border-b w-[35%]">
-                        Analyte / Test
-                      </th>
-                      <th className="text-left px-4 py-2 border-b w-[15%]">
-                        Result
-                      </th>
-                      <th className="text-left px-4 py-2 border-b w-[10%]">
-                        Unit
-                      </th>
-                      <th className="text-left px-4 py-2 border-b w-[10%]">
-                        Flag
-                      </th>
-                      <th className="text-left px-4 py-2 border-b w-[30%]">
-                        Reference Range
-                      </th>
-                      {/* Note column remains removed */}
-                    </tr>
-                  </thead>
-                  
-                  <tbody>
-                    {reportData.items.map((item, idx) => {
-                      
-                      const rows = Array.isArray(item.analytes) && item.analytes.length > 0
-                        ? item.analytes
-                        : fallbackRowsFromResultData(item.result_data);
-
-                      if (!rows || rows.length === 0) return null;
-
-                      return (
-                        <Fragment key={`${item.test_name}-${idx}`}>
-                          {/* Test/Panel Row */}
-                          <tr className="bg-gray-50 font-semibold border-b border-gray-300">
-                            <td colSpan={5} className="px-4 py-2"> {/* Colspan is 5 now */}
-                              {item.test_name} 
-                            </td>
-                          </tr>
-
-                          {/* Analytes Rows */}
-                          {rows.map((a) => {
-                            let refDisplay = a.ref_range || "N/A";
-                            if (!a.ref_range) {
-                              const hasLow = a.ref_low != null && a.ref_low !== "";
-                              const hasHigh = a.ref_high != null && a.ref_high !== "";
-                              if (hasLow && hasHigh)
-                                refDisplay = `${a.ref_low} – ${a.ref_high}`;
-                              else if (hasLow) refDisplay = `> ${a.ref_low}`;
-                              else if (hasHigh) refDisplay = `< ${a.ref_high}`;
-                            }
-
-                            const unit = a.unit || a.unit_symbol || a.unit_name || item.unit || "";
-
-                            return (
-                              <tr
-                                key={a.analyte_id || a.analyte_name}
-                                className="odd:bg-white even:bg-gray-50"
-                              >
-                                <td className="px-4 py-2 border-b">
-                                  {/* Analyte Name is slightly indented */}
-                                  <span className="pl-4">{String(a.analyte_name || `#${a.analyte_id}`)}</span>
-                                </td>
-                                <td className="px-4 py-2 border-b">
-                                  {typeof a.value === "number"
-                                    ? fmt(a.value, a.decimals ?? 2)
-                                    : a.value ?? ""}
-                                </td>
-                                <td className="px-4 py-2 border-b">{unit}</td>
-                                <td className="px-4 py-2 border-b">
-                                  <FlagCell flag={a.flag} /> {/* Flag moved here */}
-                                </td>
-                                <td className="px-4 py-2 border-b">
-                                  {refDisplay} {/* Reference Range moved here */}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </Fragment>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="p-4 text-center text-gray-500 italic">
-                No test results available.
-              </div>
-            )}
-          </section>
-
-          {/* Footer / Signatures */}
-          <footer className="text-xs text-gray-600 mt-16 pt-4 border-t">
-            
-            {/* Clinical Notes Section (If data exists) */}
-            {clinicalNote && (
-              <div className="mb-6">
-                <h4 className="font-bold text-sm text-gray-800 mb-1 underline">
-                  Clinical Notes / Interpretation
-                </h4>
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">
-                  {clinicalNote}
-                </p>
-              </div>
-            )}
-
-            {/* Signature Grid */}
-            <div className="grid grid-cols-3 gap-8 mb-6 signature-grid">
-              
-              {/* Analyst */}
-              <div className="flex flex-col items-center">
-                <div className="h-16" />
-                <p className="signature-line w-full pt-1 text-center">
-                  Analyst
-                </p>
-              </div>
-              
-              {/* Reviewed By */}
-              <div className="flex flex-col items-center">
-                 {/* Display Reviewed By Name if available from the backend */}
-                <p className="h-16 flex items-end font-semibold text-gray-800">
-                  {reportData.last_reviewed_by || ''}
-                </p>
-                <p className="signature-line w-full pt-1 text-center">
-                  Reviewed By
-                </p>
-              </div>
-              
-              {/* Pathologist / Approving Officer */}
-              <div className="flex flex-col items-center">
-                {/* Professional signature if available & allowed */}
-                {/* ✅ PERFORMANCE: Removed cache-busting query string */}
-                {pro?.show_on_reports && pro?.signature_image_url ? (
-                  <img
-                    src={`${API_BASE_URL}${pro.signature_image_url}`}
-                    alt="Signature"
-                    className="h-16 object-contain"
-                  />
-                ) : (
-                  <div className="h-16" />
-                )}
-                <p className="mt-1 font-medium text-center">
-                  {pro?.title ? `${pro.title}` : "Pathologist"}
-                  {pro?.credentials ? `, ${pro.credentials}` : ""}
-                </p>
-                {pro?.license_number && (
-                  <p className="text-[11px] text-gray-500">
-                    Lic#: {pro.license_number}
-                    {pro?.license_state ? ` (${pro.license_state})` : ""}
-                    {pro?.license_expiry
-                      ? ` • Expires: ${new Date(
-                          pro.license_expiry
-                        ).toLocaleDateString()}`
-                      : ""}
-                  </p>
-                )}
-                <p className="mt-2 signature-line w-full pt-1 text-center">
-                  Pathologist
-                </p>
-              </div>
-            </div>
-
-            {/* Verification/Review Stamp (Kept the single stamp) */}
-            <div className="text-center mt-4 italic">
-              {reportData.last_verified_by && (
-                <p>
-                  <strong>Verified by:</strong>{" "}
-                  {reportData.last_verified_by || "—"}
-                  {reportData.last_verified_at && 
-                    ` on ${new Date(reportData.last_verified_at).toLocaleString()}`
-                  }
-                </p>
-              )}
-            </div>
-
-            <p className="text-center mt-6 text-gray-500">— End of Report —</p>
-          </footer>
+      {/* Toolbar */}
+      <div className="max-w-[210mm] mx-auto mb-6 flex justify-between items-center no-print">
+        <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors">
+            <ArrowLeft size={20} /> Back
+        </button>
+        <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-500 bg-white px-3 py-1 rounded-full border shadow-sm">
+                Status: <span className={`font-bold ${reportData.report_status === 'Released' ? 'text-green-600' : 'text-amber-600'}`}>{reportData.report_status}</span>
+            </span>
+            <button onClick={handlePrint} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors shadow-sm font-medium">
+                <Printer size={20} /> Print Report
+            </button>
         </div>
       </div>
-    </>
+
+      {/* Report Paper */}
+      <div id="report-container" className="max-w-[210mm] mx-auto bg-white shadow-lg min-h-[297mm] p-10 relative flex flex-col">
+          
+          {/* 1. Header */}
+          <header className="border-b-4 border-blue-900 pb-6 mb-6 flex justify-between items-center">
+              <div className="w-28 h-24 flex items-center justify-start">
+                 {leftLogo && (
+                    <img 
+                        src={getImgUrl(leftLogo)} 
+                        alt="Lab Logo" 
+                        className="max-h-full max-w-full object-contain" 
+                        onError={(e) => e.target.style.display='none'}
+                    />
+                 )}
+              </div>
+
+              <div className="text-center flex-1 px-4">
+                  <h1 className="text-3xl font-black text-blue-900 uppercase tracking-tight mb-1">{labName}</h1>
+                  <p className="text-sm text-gray-600 font-medium uppercase tracking-wide">{labAddress}</p>
+                  <div className="flex justify-center gap-3 text-sm text-gray-500 mt-2">
+                      {labPhone && <span>📞 {labPhone}</span>}
+                      {labEmail && <span>| ✉️ {labEmail}</span>}
+                  </div>
+              </div>
+
+               <div className="w-28 h-24 flex items-center justify-end">
+                 {rightLogo && (
+                    <img 
+                        src={getImgUrl(rightLogo)} 
+                        alt="Accreditation" 
+                        className="max-h-full max-w-full object-contain" 
+                        onError={(e) => e.target.style.display='none'}
+                    />
+                 )}
+              </div>
+          </header>
+
+          {/* 2. Patient Info + Barcode */}
+          <section className="mb-8 bg-gray-50 p-4 rounded-lg border border-gray-200 text-sm shadow-sm print:shadow-none print:border-gray-300 flex items-center justify-between">
+              <div className="grid grid-cols-2 gap-y-2 gap-x-8 flex-grow max-w-[75%]">
+                  <div className="flex justify-between border-b border-gray-200 pb-1">
+                      <span className="font-bold text-gray-600 w-24">Patient:</span>
+                      <span className="text-gray-900 font-bold uppercase">{reportData.patient_full_name}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-gray-200 pb-1">
+                      <span className="font-bold text-gray-600">Lab ID:</span>
+                      <span className="font-mono text-gray-900 font-bold">{reportData.patient_lab_id}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-gray-200 pb-1">
+                      <span className="font-bold text-gray-600 w-24">Age/Sex:</span>
+                      <span className="text-gray-900">{calculateAge(reportData.date_of_birth)} / {reportData.gender}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-gray-200 pb-1">
+                      <span className="font-bold text-gray-600">Date:</span>
+                      <span className="text-gray-900">{new Date(reportData.report_date).toLocaleDateString()}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-gray-200 pb-1">
+                      <span className="font-bold text-gray-600 w-24">Ref. Doctor:</span>
+                      <span className="text-gray-900">{reportData.referring_doctor || "Self-Referral"}</span>
+                  </div>
+              </div>
+
+              <div className="flex flex-col items-center justify-center border-l pl-4 ml-4 opacity-80">
+                  <Barcode 
+                    value={barcodeValue} 
+                    width={1}       
+                    height={30}    
+                    fontSize={10}   
+                    margin={0}      
+                    displayValue={true}
+                  />
+              </div>
+          </section>
+
+          {/* 3. Report Sections (The Fix!) */}
+          <div className="flex-grow">
+            {reportSections.length === 0 && (
+                <div className="text-center py-10 text-gray-400 italic">No verified results available.</div>
+            )}
+
+            {reportSections.map((section, sIdx) => (
+                <section key={sIdx} className="mb-10 page-break-inside-avoid">
+                    {/* Section Header */}
+                    <div className="text-center mb-4">
+                         <h2 className="text-lg font-black text-gray-800 uppercase tracking-widest border-b-2 border-t-2 py-1 border-gray-200 inline-block px-8 bg-gray-50 print:bg-transparent">
+                             {section.report_header}
+                         </h2>
+                    </div>
+
+                    {/* Results Table */}
+                    <table className="w-full text-sm border-collapse">
+                        <thead>
+                            <tr className="border-b-2 border-gray-800 text-left">
+                                <th className="py-2 pl-2 w-[40%] font-bold text-gray-800 uppercase text-xs tracking-wider">Test Name</th>
+                                <th className="py-2 w-[12%] font-bold text-gray-800 uppercase text-xs tracking-wider">Result</th>
+                                <th className="py-2 w-[8%] text-left font-bold text-gray-800 uppercase text-xs tracking-wider pl-0">Flag</th>
+                                <th className="py-2 w-[15%] font-bold text-gray-800 uppercase text-xs tracking-wider">Unit</th>
+                                <th className="py-2 pr-2 w-[25%] text-right font-bold text-gray-800 uppercase text-xs tracking-wider">Ref. Range</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {section.items.map((item, iIdx) => (
+                                <Fragment key={iIdx}>
+                                    {/* Panel Header Row */}
+                                    {item.is_panel && (
+                                        <tr className="bg-gray-100 border-b border-gray-200 print:bg-gray-50/50">
+                                            <td colSpan={5} className="py-1.5 px-2 font-bold text-gray-900 text-xs uppercase tracking-wide pl-4">
+                                                {item.test_name}
+                                            </td>
+                                        </tr>
+                                    )}
+
+                                    {/* Analytes Row */}
+                                    {item.analytes.map((a, aIdx) => (
+                                        <tr key={aIdx} className="border-b border-gray-100 print:border-gray-200 hover:bg-gray-50 transition-colors print:hover:bg-transparent">
+                                            <td className={`py-2 ${item.is_panel ? "pl-8" : "px-2"} font-medium text-gray-700`}>
+                                                {!item.is_panel ? item.test_name : a.analyte_name}
+                                            </td>
+                                            
+                                            <td className="py-2 font-bold text-gray-900 text-xs">
+                                                {a.value || "—"}
+                                            </td>
+                                            
+                                            <td className="py-2 text-left pl-0">
+                                                <FlagCell flag={a.flag} />
+                                            </td>
+
+                                            <td className="py-2 text-gray-600 text-xs font-medium">
+                                                {/* Use the symbol if available, fallback to empty */}
+                                                {a.unit_symbol || a.unit || "—"}
+                                            </td>
+                                            
+                                            <td className="py-2 pr-2 text-right text-gray-700 text-xs font-medium whitespace-pre-wrap">
+                                                {a.ref_range || "—"}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </Fragment>
+                            ))}
+                        </tbody>
+                    </table>
+                </section>
+            ))}
+
+            {/* Clinical Notes */}
+            {reportData.clinical_note && (
+                <div className="mt-6 p-4 bg-blue-50 border-l-4 border-blue-500 rounded print:bg-white print:border-gray-300 page-break-inside-avoid">
+                    <h4 className="text-xs font-bold text-blue-800 uppercase mb-1 print:text-gray-800">Clinical Notes / Comments:</h4>
+                    <p className="text-sm text-gray-800">{reportData.clinical_note}</p>
+                </div>
+            )}
+          </div>
+
+          {/* 4. Footer */}
+          <footer className="mt-auto pt-10 page-break-inside-avoid">
+              <div className="grid grid-cols-2 gap-16">
+                  <div className="text-center">
+                      <div className="h-16 mb-2"></div> 
+                      <div className="border-t border-gray-400 pt-2">
+                          <p className="font-bold text-sm text-gray-800">Laboratory Scientist</p>
+                          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Performed by</p>
+                      </div>
+                  </div>
+                  <div className="text-center">
+                      <div className="h-16 flex items-end justify-center pb-2">
+                          {reportData.last_verified_by && (
+                             <span className="font-serif text-lg text-blue-900 italic" style={{ fontFamily: '"Brush Script MT", cursive' }}>
+                                {reportData.last_verified_by}
+                             </span>
+                          )}
+                      </div>
+                      <div className="border-t border-gray-400 pt-2">
+                          <p className="font-bold text-sm text-gray-800">Pathologist / Senior Scientist</p>
+                          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Verified & Released</p>
+                      </div>
+                  </div>
+              </div>
+              <div className="mt-6 text-center text-[9px] text-gray-400 border-t border-gray-100 pt-2 flex justify-between">
+                  <span>Generated on {new Date().toLocaleString()}</span>
+                  <span>{labName} • Lab Management System</span>
+                  <span>Page 1 of 1</span>
+              </div>
+          </footer>
+      </div>
+    </div>
   );
 };
 

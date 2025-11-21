@@ -1,86 +1,40 @@
-// ============================================================
-// 🛰️ Socket Event Broadcaster Utility
-// ============================================================
-//
-// This utility provides a set of helper functions to emit real-time
-// events to users, departments, or globally from any controller.
-//
-// Usage example inside a controller:
-//   const { emitToDepartment, emitToUser, emitGlobal } = require("../utils/socketEmitter");
-//   emitToDepartment(req, "chemistry", "result_saved", { test_id: 12, updated_by: "Dr. Jalloh" });
-//
-// ============================================================
-
 /**
- * Emit event to a specific department room (e.g., dept-chemistry)
+ * Emits a socket event to a specific department room.
+ * Handles normalization of room names to match server.js logic.
  */
-function emitToDepartment(req, department, eventName, payload = {}) {
-    try {
-      const io = req.app.get("io");
-      if (!io) return console.warn("⚠️ io instance not found in app context");
-  
-      const dept = (department || "").toLowerCase();
-      if (!dept) return console.warn("⚠️ emitToDepartment called with no department");
-  
-      io.to(`dept-${dept}`).emit(eventName, payload);
-      console.log(`📡 [emitToDepartment] → dept-${dept} | ${eventName}`);
-    } catch (err) {
-      console.error("❌ emitToDepartment error:", err.message);
+const emitToDepartment = (req, department, event, data) => {
+  try {
+    // 1. Try getting IO from app context (preferred)
+    let io = req.app.get("io");
+
+    // 2. Fallback to global.io if app.get fails (legacy support)
+    if (!io && global.io) {
+      io = global.io;
     }
-  }
-  
-  /**
-   * Emit event to a specific user socket
-   * (requires user to have joined room "user-{id}" on connect)
-   */
-  function emitToUser(req, userId, eventName, payload = {}) {
-    try {
-      const io = req.app.get("io");
-      if (!io) return console.warn("⚠️ io instance not found in app context");
-      if (!userId) return console.warn("⚠️ emitToUser called without userId");
-  
-      io.to(`user-${userId}`).emit(eventName, payload);
-      console.log(`📡 [emitToUser] → user-${userId} | ${eventName}`);
-    } catch (err) {
-      console.error("❌ emitToUser error:", err.message);
+
+    if (!io) {
+      console.warn("⚠️ Socket.io instance not found. Notification skipped.");
+      return;
     }
-  }
-  
-  /**
-   * Emit event to all connected sockets globally
-   */
-  function emitGlobal(req, eventName, payload = {}) {
-    try {
-      const io = req.app.get("io");
-      if (!io) return console.warn("⚠️ io instance not found in app context");
-  
-      io.emit(eventName, payload);
-      console.log(`🌍 [emitGlobal] | ${eventName}`);
-    } catch (err) {
-      console.error("❌ emitGlobal error:", err.message);
+
+    if (!department) {
+      console.warn("⚠️ Cannot emit socket: No department specified.");
+      return;
     }
+
+    // ✅ FIX: Normalize room name to match server.js join logic
+    // Server logic: `dept-${String(dept).toLowerCase()}`
+    const roomName = `dept-${String(department).toLowerCase()}`;
+
+    // Emit to the specific department room
+    io.to(roomName).emit(event, data);
+    
+    // Debug log (optional)
+    // console.log(`📡 Emitted ${event} to room: ${roomName}`);
+
+  } catch (error) {
+    console.error("❌ Socket emit error:", error.message);
   }
-  
-  /**
-   * Emit to a custom room (useful for admin dashboards or specific pages)
-   */
-  function emitToRoom(req, roomName, eventName, payload = {}) {
-    try {
-      const io = req.app.get("io");
-      if (!io) return console.warn("⚠️ io instance not found in app context");
-      if (!roomName) return console.warn("⚠️ emitToRoom called with no room name");
-  
-      io.to(roomName).emit(eventName, payload);
-      console.log(`🏷️ [emitToRoom] → ${roomName} | ${eventName}`);
-    } catch (err) {
-      console.error("❌ emitToRoom error:", err.message);
-    }
-  }
-  
-  module.exports = {
-    emitToDepartment,
-    emitToUser,
-    emitGlobal,
-    emitToRoom,
-  };
-  
+};
+
+module.exports = { emitToDepartment };

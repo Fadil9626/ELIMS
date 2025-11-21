@@ -1,24 +1,36 @@
-// controllers/patientController.js
 const pool = require('../config/database');
 const { logAuditEvent } = require('../utils/auditLogger');
 
+/* -----------------------------------------------------------
+ * SQL SANITIZER – removes non-breaking / zero-width spaces
+ * -------------------------------------------------------- */
+function sanitizeSQL(sql) {
+  // Replace BOM, NBSP, zero-width joiners, etc. with normal spaces
+  return sql.replace(/[\uFEFF\u00A0\u200B\u200C\u200D]/g, ' ');
+}
+
+/* Small helper if you want to use it elsewhere in this file */
+async function runQuery(sql, params = []) {
+  const clean = sanitizeSQL(sql);
+  return pool.query(clean, params);
+}
+
 /** ===========================================================
- * MRN Generator
+ * MRN Generator (NOW ATOMIC)
  * ========================================================== */
-const generateMRN = async () => {
-  // ... (function unchanged)
-  const { rows } = await pool.query(`SELECT * FROM mrn_settings LIMIT 1`);
-  const s = rows[0];
+// Accepts client for atomic update within a transaction.
+const generateMRN = async (client) => {
+  const sql = sanitizeSQL(`
+    UPDATE mrn_settings 
+    SET last_sequence = last_sequence + 1, updated_at = NOW() 
+    WHERE id = (SELECT id FROM mrn_settings LIMIT 1)
+    RETURNING last_sequence, facility_code
+  `);
 
-  let seq = s.last_sequence + 1;
+  const result = await client.query(sql);
+  const { last_sequence: seq, facility_code: s } = result.rows[0];
   const year = new Date().getFullYear();
-  const mrn = `${s.facility_code}-${year}-${String(seq).padStart(6, '0')}`;
-
-  await pool.query(
-    `UPDATE mrn_settings SET last_sequence=$1, updated_at=NOW() WHERE id=$2`,
-    [seq, s.id]
-  );
-
+  const mrn = `${s}-${year}-${String(seq).padStart(6, '0')}`;
   return mrn;
 };
 
@@ -26,7 +38,6 @@ const generateMRN = async () => {
  * Ensure numeric ID
  * ========================================================== */
 const ensureNumericId = (id) => {
-  // ... (function unchanged)
   if (!/^\d+$/.test(String(id))) {
     const err = new Error('Invalid ID');
     err.statusCode = 400;
@@ -35,11 +46,23 @@ const ensureNumericId = (id) => {
   return Number(id);
 };
 
+/**
+ * Normalize admission type to DB Enum
+ * DB Expects: 'OPD', 'IPD', 'Emergency'
+ */
+const normalizeAdmissionType = (type) => {
+  if (!type) return 'OPD';
+
+  const lower = String(type).toLowerCase().trim();
+  if (lower === 'inpatient' || lower === 'ipd') return 'IPD';
+  if (lower === 'emergency') return 'Emergency';
+  return 'OPD';
+};
+
 /** ===========================================================
  * REGISTER PATIENT
  * ========================================================== */
 const registerPatient = async (req, res) => {
-  // ... (function unchanged)
   const {
     firstName,
     middleName,
@@ -58,7 +81,8 @@ const registerPatient = async (req, res) => {
     emergencyRelationship,
     emergencyPhone,
     is_confidential = false,
-    restricted_doctor_id = null
+    restricted_doctor_id = null,
+    priority = 'ROUTINE', // currently not stored in DB
   } = req.body;
 
   const registeredBy = req.user.id;
@@ -69,83 +93,112 @@ const registerPatient = async (req, res) => {
     });
   }
 
+  const normalizedAdmissionType = normalizeAdmissionType(admissionType);
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    const mrn = await generateMRN();
+    const mrn = await generateMRN(client);
 
-    const inserted = await client.query(
-      `
+    const insertSql = sanitizeSQL(`
       INSERT INTO patients (
-        mrn, first_name, middle_name, last_name, date_of_birth, gender,
-        marital_status, occupation,
-        contact_phone, contact_address, contact_email,
-        admission_type, ward_id,
-        emergency_name, emergency_relationship, emergency_phone,
-        referring_doctor, registered_by,
-        is_confidential, restricted_doctor_id
+        mrn,
+        first_name,
+        middle_name,
+        last_name,
+        date_of_birth,
+        gender,
+        marital_status,
+        occupation,
+        contact_phone,
+        contact_address,
+        contact_email,
+        admission_type,
+        ward_id,
+        referring_doctor,
+        emergency_name,
+        emergency_relationship,
+        emergency_phone,
+        registered_by,
+        registered_at,
+        is_active,
+        phone,
+        address,
+        is_confidential,
+        restricted_doctor_id
       )
       VALUES (
         $1,$2,$3,$4,$5,$6,
         $7,$8,
         $9,$10,$11,
-        $12,$13,
-        $14,$15,$16,
-        $17,$18,
-        $19,$20
+        $12,
+        $13,
+        $14,
+        $15,$16,$17,
+        $18,
+        NOW(),
+        TRUE,
+        $19,
+        $20,
+        $21,
+        $22
       )
       RETURNING *
-      `,
-      [
-        mrn,
-        firstName,
-        middleName || null,
-        lastName,
-        dateOfBirth,
-        gender || null,
-        maritalStatus || null,
-        occupation || null,
-        contactPhone || null,
-        contactAddress || null,
-        contactEmail || null,
-        admissionType || 'OPD',
-        wardId || null,
-        emergencyName || null,
-        emergencyRelationship || null,
-        emergencyPhone || null,
-        referringDoctor || null,
-        registeredBy,
-        is_confidential,
-        restricted_doctor_id || null,
-      ]
-    );
+    `);
+
+    const inserted = await client.query(insertSql, [
+      mrn,
+      firstName,
+      middleName || null,
+      lastName,
+      dateOfBirth,
+      gender || null,
+      maritalStatus || null,
+      occupation || null,
+      contactPhone || null,
+      contactAddress || null,
+      contactEmail || null,
+      normalizedAdmissionType,
+      wardId || null,
+      referringDoctor || null,
+      emergencyName || null,
+      emergencyRelationship || null,
+      emergencyPhone || null,
+      registeredBy,
+      contactPhone || null,      // phone
+      contactAddress || null,    // address
+      is_confidential,
+      restricted_doctor_id || null,
+    ]);
 
     const patient = inserted.rows[0];
 
+    // Generate Lab ID (e.g., YYYYMM-PatientID)
     const now = new Date();
     const labId = `${now.getFullYear()}${String(
       now.getMonth() + 1
     ).padStart(2, '0')}-${patient.id}`;
 
-    const updated = await client.query(
-      `UPDATE patients SET lab_id=$1 WHERE id=$2 RETURNING *`,
-      [labId, patient.id]
+    const updateSql = sanitizeSQL(
+      `UPDATE patients SET lab_id = $1 WHERE id = $2 RETURNING *`
     );
+    const updated = await client.query(updateSql, [labId, patient.id]);
 
     await client.query('COMMIT');
 
     await logAuditEvent({
       user_id: registeredBy,
       action: 'PATIENT_CREATE',
-      details: { patient_id: patient.id, mrn, lab_id: labId },
+      details: { patient_id: patient.id, mrn, lab_id: labId, priority },
     });
 
-    return res.status(201).json(updated.rows[0]);
+    const finalPatient = { ...updated.rows[0], priority };
+    return res.status(201).json(finalPatient);
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('❌ RegisterPatient Error:', error.message);
-    res.status(500).send('Server Error');
+    console.error('❌ RegisterPatient Error:', error);
+    return res.status(500).json({ message: 'Server Error registering patient' });
   } finally {
     client.release();
   }
@@ -153,40 +206,10 @@ const registerPatient = async (req, res) => {
 
 /** ===========================================================
  * GET ALL PATIENTS
- * ✅ **FIX**: Now filters the list for lab roles
  * ========================================================== */
 const getAllPatients = async (req, res) => {
   try {
-    // 1. Get the user's permissions
-    const { permissions_map } = req.user;
-    const isSuperAdmin = permissions_map?.["*:*"] === true;
-    
-    // 2. Define who can see ALL patients (e.g., reception, billing, admins)
-    const canSeeAllPatients =
-      isSuperAdmin ||
-      permissions_map["Patients:Create"] === true ||
-      permissions_map["Billing:Create"] === true;
-
-    // 3. Create a dynamic filter
-    let filterClause = "";
-    if (!canSeeAllPatients) {
-      // User is in a lab role (Scientist, Pathologist, Phlebotomist)
-      // Only show patients who are actively in the lab workflow.
-      filterClause = `
-        WHERE tr.status IN (
-          'InProgress', 
-          'Completed', 
-          'Verified', 
-          'Released',
-          'SampleCollected', -- Show patients from phlebotomy onwards
-          'UnderReview',
-          'Reopened'
-        )
-      `;
-    }
-
-    // 4. Inject the filter into the main query
-    const query = `
+    const sql = sanitizeSQL(`
       SELECT 
         p.id,
         p.mrn,
@@ -201,6 +224,7 @@ const getAllPatients = async (req, res) => {
         p.contact_email,
         p.admission_type,
         w.name AS ward_name,
+        'ROUTINE' AS priority,  -- temp default until column exists
         p.is_confidential,
         p.restricted_doctor_id,
         tr.id AS latest_request_id,
@@ -217,13 +241,10 @@ const getAllPatients = async (req, res) => {
         ORDER BY id DESC
         LIMIT 1
       ) tr ON TRUE
-      ${filterClause}  -- ✅ The dynamic filter is added here
       ORDER BY p.id DESC;
-    `;
+    `);
 
-    const result = await pool.query(query);
-
-    // await logAuditEvent({ user_id: req.user.id, action: 'PATIENT_VIEW_ALL' });
+    const result = await pool.query(sql);
 
     return res.status(200).json(result.rows);
   } catch (err) {
@@ -236,19 +257,17 @@ const getAllPatients = async (req, res) => {
  * GET PATIENT BY ID
  * ========================================================== */
 const getPatientById = async (req, res) => {
-  // ... (function unchanged)
   try {
     const id = ensureNumericId(req.params.id);
 
-    const result = await pool.query(
-      `
+    const sql = sanitizeSQL(`
       SELECT p.*, w.name AS ward_name
       FROM patients p
       LEFT JOIN wards w ON p.ward_id = w.id
       WHERE p.id = $1
-      `,
-      [id]
-    );
+    `);
+
+    const result = await pool.query(sql, [id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Patient not found' });
@@ -267,10 +286,9 @@ const getPatientById = async (req, res) => {
 };
 
 /** ===========================================================
- * UPDATE PATIENT (✅ supports confidential fields)
+ * UPDATE PATIENT
  * ========================================================== */
 const updatePatient = async (req, res) => {
-  // ... (function unchanged)
   const { id } = req.params;
 
   const {
@@ -291,48 +309,58 @@ const updatePatient = async (req, res) => {
     emergencyRelationship,
     emergencyPhone,
     is_confidential = false,
-    restricted_doctor_id = null
+    restricted_doctor_id = null,
   } = req.body;
 
   try {
     const numericId = ensureNumericId(id);
+    const normalizedAdmissionType = normalizeAdmissionType(admissionType);
 
-    const result = await pool.query(
-      `
+    const sql = sanitizeSQL(`
       UPDATE patients SET
-        first_name=$1, middle_name=$2, last_name=$3, date_of_birth=$4, gender=$5,
-        marital_status=$6, occupation=$7,
-        contact_phone=$8, contact_address=$9, contact_email=$10,
-        admission_type=$11, ward_id=$12,
-        emergency_name=$13, emergency_relationship=$14, emergency_phone=$15,
-        referring_doctor=$16,
-        is_confidential=$17,
-        restricted_doctor_id=$18
-      WHERE id=$19
+        first_name = $1,
+        middle_name = $2,
+        last_name = $3,
+        date_of_birth = $4,
+        gender = $5,
+        marital_status = $6,
+        occupation = $7,
+        contact_phone = $8,
+        contact_address = $9,
+        contact_email = $10,
+        admission_type = $11,
+        ward_id = $12,
+        emergency_name = $13,
+        emergency_relationship = $14,
+        emergency_phone = $15,
+        referring_doctor = $16,
+        is_confidential = $17,
+        restricted_doctor_id = $18
+      WHERE id = $19
       RETURNING *
-      `,
-      [
-        firstName,
-        middleName || null,
-        lastName,
-        dateOfBirth,
-        gender || null,
-        maritalStatus || null,
-        occupation || null,
-        contactPhone || null,
-        contactAddress || null,
-        contactEmail || null,
-        admissionType || 'OPD',
-        wardId || null,
-        emergencyName || null,
-        emergencyRelationship || null,
-        emergencyPhone || null,
-        referringDoctor || null,
-        is_confidential,
-        restricted_doctor_id || null,
-        numericId,
-      ]
-    );
+    `);
+
+    const result = await pool.query(sql, [
+      firstName,
+      middleName || null,
+      lastName,
+      dateOfBirth,
+      gender || null,
+      maritalStatus || null,
+      occupation || null,
+      contactPhone || null,
+      contactAddress || null,
+      contactEmail || null,
+      normalizedAdmissionType,
+      wardId || null,
+      emergencyName || null,
+      emergencyRelationship || null,
+      emergencyPhone || null,
+      referringDoctor || null,
+      is_confidential,
+      restricted_doctor_id || null,
+      numericId,
+    ]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Patient not found' });
@@ -354,14 +382,14 @@ const updatePatient = async (req, res) => {
  * DELETE PATIENT
  * ========================================================== */
 const deletePatient = async (req, res) => {
-  // ... (function unchanged)
   try {
     const id = ensureNumericId(req.params.id);
 
-    const result = await pool.query(
-      `DELETE FROM patients WHERE id=$1 RETURNING *`,
-      [id]
+    const sql = sanitizeSQL(
+      `DELETE FROM patients WHERE id = $1 RETURNING *`
     );
+
+    const result = await pool.query(sql, [id]);
 
     if (result.rowCount === 0) {
       return res.status(404).json({ message: 'Patient not found' });
@@ -380,14 +408,13 @@ const deletePatient = async (req, res) => {
 };
 
 /** ===========================================================
- * PATIENT TEST HISTORY (✅ restored)
+ * PATIENT TEST HISTORY
  * ========================================================== */
 const getPatientTestHistory = async (req, res) => {
-  // ... (function unchanged)
   try {
     const id = ensureNumericId(req.params.id);
 
-    const sql = `
+    const sql = sanitizeSQL(`
       SELECT
         tr.id,
         tr.created_at,
@@ -399,8 +426,8 @@ const getPatientTestHistory = async (req, res) => {
         ON tr.id = tri.test_request_id
       WHERE tr.patient_id = $1
       GROUP BY tr.id, tr.created_at, tr.status, tr.payment_status
-      ORDER BY tr.created_at DESC;
-    `;
+      ORDER BY tr.created_at DESC
+    `);
 
     const result = await pool.query(sql, [id]);
 
@@ -413,11 +440,9 @@ const getPatientTestHistory = async (req, res) => {
     return res.status(200).json(result.rows);
   } catch (err) {
     const status = err.statusCode || 500;
-
     if (!err.statusCode) {
       console.error('❌ getPatientTestHistory Error:', err.message);
     }
-
     return res.status(status).send(
       err.statusCode ? { message: 'Invalid patient ID' } : 'Server Error'
     );
@@ -428,19 +453,18 @@ const getPatientTestHistory = async (req, res) => {
  * LOOKUP BY MRN
  * ========================================================== */
 const getPatientByMRN = async (req, res) => {
-  // ... (function unchanged)
   try {
     const { mrn } = req.params;
-    const result = await pool.query(
-      `
+
+    const sql = sanitizeSQL(`
       SELECT p.*, w.name AS ward_name
       FROM patients p
       LEFT JOIN wards w ON p.ward_id = w.id
       WHERE p.mrn = $1
       LIMIT 1
-      `,
-      [mrn]
-    );
+    `);
+
+    const result = await pool.query(sql, [mrn]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Patient not found' });
@@ -460,12 +484,11 @@ const getPatientByMRN = async (req, res) => {
 };
 
 /** ===========================================================
- * SEARCH + PAGINATION (REPLACED WITH YOUR NEW CODE)
+ * SEARCH + PAGINATION
  * ========================================================== */
 const searchPatients = async (req, res) => {
-  // ... (function unchanged)
   try {
-    const { q = "", year, page = 1, limit = 10 } = req.query;
+    const { q = '', year, page = 1, limit = 10 } = req.query;
 
     const filterYear = parseInt(year, 10) || new Date().getFullYear();
     const safePage = parseInt(page, 10);
@@ -473,9 +496,10 @@ const searchPatients = async (req, res) => {
     const offset = (safePage - 1) * safeLimit;
     const searchTerm = `%${q.toLowerCase()}%`;
 
-    const patients = await pool.query(`
+    const sqlList = sanitizeSQL(`
       SELECT 
         p.id,
+        p.mrn,
         p.lab_id,
         p.first_name,
         p.last_name,
@@ -486,32 +510,41 @@ const searchPatients = async (req, res) => {
       WHERE 
         COALESCE(EXTRACT(YEAR FROM p.registered_at), $1) = $1
         AND (
-          LOWER(p.first_name) LIKE $2 OR
-          LOWER(p.last_name) LIKE $2 OR
-          LOWER(p.lab_id) LIKE $2 OR
-          LOWER(p.contact_phone) LIKE $2 OR
-          LOWER(COALESCE(p.referring_doctor, '')) LIKE $2
-          OR LOWER(COALESCE(w.name, '')) LIKE $2
+          p.first_name ILIKE $2 OR
+          p.last_name ILIKE $2 OR
+          p.lab_id ILIKE $2 OR
+          p.contact_phone ILIKE $2 OR
+          COALESCE(p.referring_doctor, '') ILIKE $2 OR
+          COALESCE(w.name, '') ILIKE $2
         )
       ORDER BY p.registered_at DESC NULLS LAST
       LIMIT $3 OFFSET $4
-    `, [filterYear, searchTerm, safeLimit, offset]);
+    `);
 
-    const count = await pool.query(`
+    const sqlCount = sanitizeSQL(`
       SELECT COUNT(*) AS total
       FROM patients p
       LEFT JOIN wards w ON w.id = p.ward_id
       WHERE 
         COALESCE(EXTRACT(YEAR FROM p.registered_at), $1) = $1
         AND (
-          LOWER(p.first_name) LIKE $2 OR
-          LOWER(p.last_name) LIKE $2 OR
-          LOWER(p.lab_id) LIKE $2
-          OR LOWER(p.contact_phone) LIKE $2
-          OR LOWER(COALESCE(p.referring_doctor, '')) LIKE $2
-          OR LOWER(COALESCE(w.name, '')) LIKE $2
+          p.first_name ILIKE $2 OR
+          p.last_name ILIKE $2 OR
+          p.lab_id ILIKE $2 OR
+          p.contact_phone ILIKE $2 OR
+          COALESCE(p.referring_doctor, '') ILIKE $2 OR
+          COALESCE(w.name, '') ILIKE $2
         )
-    `, [filterYear, searchTerm]);
+    `);
+
+    const patients = await pool.query(sqlList, [
+      filterYear,
+      searchTerm,
+      safeLimit,
+      offset,
+    ]);
+
+    const count = await pool.query(sqlCount, [filterYear, searchTerm]);
 
     return res.json({
       results: patients.rows,
@@ -519,10 +552,9 @@ const searchPatients = async (req, res) => {
       page: safePage,
       totalPages: Math.ceil(count.rows[0].total / safeLimit) || 1,
     });
-
   } catch (err) {
-    console.error("❌ searchPatients error:", err);
-    return res.status(500).json({ message: "Search failed" });
+    console.error('❌ searchPatients error:', err);
+    return res.status(500).json({ message: 'Search failed' });
   }
 };
 
@@ -537,5 +569,5 @@ module.exports = {
   deletePatient,
   getPatientTestHistory,
   getPatientByMRN,
-  searchPatients, // ✅ ADDED
+  searchPatients,
 };

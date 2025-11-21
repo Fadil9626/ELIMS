@@ -1,4 +1,3 @@
-// /routes/labConfigRoutes.js
 const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middleware/authMiddleware");
@@ -31,6 +30,9 @@ const {
 
   // ⚙️ Config Tables
   getAllUnits,
+  createUnit,
+  updateUnit,
+  deleteUnit,
 
   // Departments
   getDepartments,
@@ -60,32 +62,40 @@ router.use(protect);
 // ============================================================
 
 // 🏥 Departments
-router.get("/departments", authorize(MODULE, "view"), getDepartments);
+// ✅ FIX: Removed authorize() so Receptionists can see the list
+router.get("/departments", getDepartments);
 router.post("/departments", authorize(MODULE, "edit"), createDepartment);
 router.put("/departments/:id", authorize(MODULE, "edit"), updateDepartment);
 router.delete("/departments/:id", authorize(MODULE, "edit"), deleteDepartment);
 
 // 🧫 Sample Types
-router.get("/sample-types", authorize(MODULE, "view"), getSampleTypes);
+// ✅ FIX: Removed authorize() for dropdowns
+router.get("/sample-types", getSampleTypes);
 router.post("/sample-types", authorize(MODULE, "edit"), createSampleType);
 router.put("/sample-types/:id", authorize(MODULE, "edit"), updateSampleType);
 router.delete("/sample-types/:id", authorize(MODULE, "edit"), deleteSampleType);
 
 // 📏 Units
-router.get("/units", authorize(MODULE, "view"), getAllUnits);
+// ✅ FIX: Removed authorize()
+router.get("/units", getAllUnits);
+router.post("/units", authorize(MODULE, "edit"), createUnit);
+router.put("/units/:id", authorize(MODULE, "edit"), updateUnit);
+router.delete("/units/:id", authorize(MODULE, "edit"), deleteUnit);
 
 // 🏨 Wards
-router.get("/wards", authorize(MODULE, "view"), getWards);
+// ✅ FIX: Removed authorize()
+router.get("/wards", getWards);
 
 // ============================================================
 // 🧪 TESTS / ANALYTES
 // ============================================================
 
 // 📋 Full test list (includes analytes + panels)
-router.get("/tests/all", authorize(MODULE, "view"), getAllTests);
+// ✅ FIX: Removed authorize() so "New Request" form can load tests
+router.get("/tests/all", getAllTests);
 
 // 🔬 Analytes only
-router.get("/tests", authorize(MODULE, "view"), getAnalytes);
+router.get("/tests", authorize(MODULE, "view"), getAnalytes); // Keeping restricted as this is usually for config view
 router.post("/tests", authorize(MODULE, "edit"), createAnalyte);
 router.put("/tests/:id", authorize(MODULE, "edit"), updateAnalyte);
 

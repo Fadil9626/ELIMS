@@ -1,38 +1,48 @@
 // ============================================================
-// AUTH ROUTES
-// /api/login  → public
-// /api/register → protected (admin only)
-// /api/me     → protected
+// AUTH ROUTES (RBAC + Audit Safe)
+// /api/auth/login    → Public
+// /api/auth/register → Admin Only (RBAC Protected)
+// /api/auth/me       → Authenticated User Profile
 // ============================================================
 
 const express = require("express");
 const router = express.Router();
 
-// Import controller functions
+// Controller
 const {
   registerUser,
   loginUser,
   getMe,
+  logoutUser,
 } = require("../controllers/authController");
 
-// Import auth middleware
-const { protect } = require("../middleware/authMiddleware");
+// Auth Middleware
+const { protect, authorize } = require("../middleware/authMiddleware");
 
-// ---------------------------------------------------
+// ------------------------------------------------------------
 // PUBLIC ROUTES
-// ---------------------------------------------------
+// ------------------------------------------------------------
 router.post("/login", loginUser);
 
-// ---------------------------------------------------
+// ------------------------------------------------------------
 // PROTECTED ROUTES
-// ---------------------------------------------------
-// Register new user (admin only)
-router.post("/register", protect, registerUser);
+// ------------------------------------------------------------
 
-// Get current user
+// Create new user (Admin/SuperAdmin or role with users:create)
+router.post(
+  "/register",
+  protect,
+  authorize("users", "create"),
+  registerUser
+);
+
+// Get logged-in user profile
 router.get("/me", protect, getMe);
 
-// ---------------------------------------------------
-// EXPORT
-// ---------------------------------------------------
+// Logout user
+router.post("/logout", protect, logoutUser);
+
+// ------------------------------------------------------------
+// EXPORT ROUTER
+// ------------------------------------------------------------
 module.exports = router;

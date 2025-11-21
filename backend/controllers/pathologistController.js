@@ -1,740 +1,524 @@
-// ============================================================
-// 🧠 Pathologist Controller (Final, Complete, Array-safe)
-// ============================================================
-
 const pool = require("../config/database");
-const { emitToDepartment } = require("../utils/socketEmitter");
+const { emitToDepartment } = require("../utils/socketEmitter"); 
 
 // ------------------------------------------------------------
-// 🧮 Helper: Reference details (range / qualitative)
+// 🔗 Department Clusters (The "Smart Combine" Logic)
 // ------------------------------------------------------------
-async function getRefDetails(client, analyteId, value) {
-  // ... (Helper code is unchanged)
-  let ref_text = null;
-  let type = "quantitative";
-  let qualitative_values = [];
-  let flag = null;
-
-  const { rows } = await client.query(
-    `SELECT range_type, min_value, max_value, symbol_operator, qualitative_values
-     FROM normal_ranges
-     WHERE analyte_id = $1
-     ORDER BY id`,
-    [analyteId]
-  );
-
-  if (rows.length) {
-    const r = rows[0];
-    const rt = (r.range_type || "").toLowerCase();
-
-    // Decide type by name; supports values like "numeric", "number", etc.
-    type = rt.includes("num") || rt.includes("range") || rt.includes("quant")
-      ? "quantitative"
-      : "qualitative";
-
-    if (type === "quantitative") {
-      if (r.min_value != null && r.max_value != null) {
-        ref_text = `${r.min_value} – ${r.max_value}`;
-      } else if (r.min_value != null) {
-        ref_text = `≥ ${r.min_value}`;
-      } else if (r.max_value != null) {
-        ref_text = `≤ ${r.max_value}`;
-      } else if (r.symbol_operator && r.max_value != null) {
-        ref_text = `${r.symbol_operator} ${r.max_value}`;
-      }
-
-      const numVal = parseFloat(value);
-      if (!Number.isNaN(numVal)) {
-        if (r.min_value != null && numVal < r.min_value) flag = "L";
-        else if (r.max_value != null && numVal > r.max_value) flag = "H";
-        else flag = "N";
-      }
-    } else {
-      // Prefer array as-is; fall back to empty
-      if (Array.isArray(r.qualitative_values)) {
-        qualitative_values = r.qualitative_values.filter(Boolean).map(String);
-      }
-      ref_text = qualitative_values.length ? qualitative_values.join(" / ") : "—";
-
-      if (value != null && value !== "") {
-        const v = String(value).toLowerCase();
-        const expected = qualitative_values.map((x) => x.toLowerCase());
-        flag = expected.includes(v) ? "N" : "A";
-      }
-    }
-  }
-
-  // Fallback to test_catalog.qualitative_values if none found above
-  if (!qualitative_values.length) {
-    const { rows: tcRows } = await client.query(
-      `SELECT qualitative_values FROM test_catalog WHERE id = $1`,
-      [analyteId]
-    );
-    if (tcRows.length) {
-      const qv = tcRows[0].qualitative_values;
-      if (Array.isArray(qv) && qv.length) {
-        qualitative_values = qv.filter(Boolean).map(String);
-        if (!ref_text) ref_text = qualitative_values.join(" / ");
-      }
-      if (type === "qualitative" && value && !flag) {
-        const v = String(value).toLowerCase();
-        const expected = qualitative_values.map((x) => String(x).toLowerCase());
-        flag = expected.includes(v) ? "N" : "A";
-      }
-    }
-  }
-
-  return { ref_text, type, qualitative_values, flag };
-}
-// ------------------------------------------------------------
-// 🔎 Status helpers
-// ------------------------------------------------------------
-const DISPLAY_TO_DB_STATUS = new Map([
-  ["Sample Collected", "SampleCollected"],
-  ["In Progress", "InProgress"],
-  ["Under Review", "UnderReview"],
-  ["Re-opened", "Reopened"],
-]);
-
-const VALID_ITEM_STATUSES = new Set([
-  "Pending",
-  "SampleCollected",
-  "InProgress",
-  "Completed",
-  "Verified",
-  "Rejected",
-  "UnderReview",
-  "Reopened",
-  "Released",
-  "Cancelled",
-]);
-
-function normalizeStatus(input) {
-  if (!input) return null;
-  const trimmed = String(input).trim();
-  return DISPLAY_TO_DB_STATUS.get(trimmed) || trimmed;
-}
-
-// ============================================================
-// 📋 Worklist (FINAL - RLS & Department Filter Implemented)
-// ============================================================
-const getPathologistWorklist = async (req, res) => {
-  const { from, to, status, search } = req.query;
-  
-  // ✅ **FIX 1: Get full user context from req.user**
-  const {
-    id: currentUserId,
-    department: userDepartment,
-    permissions_map
-  } = req.user || {};
-  const isSuperAdmin = permissions_map?.["*:*"] === true;
-
-  try {
-    const where = [];
-    const params = [];
-    let i = 1;
-
-    // 💡 RLS IMPLEMENTATION: Filter by assignment (unclaimed OR assigned to me)
-    where.push(`(tri.reviewed_by_id IS NULL OR tri.reviewed_by_id = $${i++})`);
-    params.push(currentUserId);
-
-    // ✅ **FIX 2: Implement robust department filtering**
-    if (!isSuperAdmin) {
-      if (!userDepartment) {
-        // Not an admin and no department assigned = can't see any lab work.
-        return res.status(200).json([]);
-      }
-      // Is not a Super Admin, so filter by their department
-      where.push(`d.name = $${i++}`);
-      params.push(userDepartment);
-    }
-    // If isSuperAdmin, this block is skipped, and no department filter is added.
-
-    // Only atomic tests in the worklist (not the parent panel rows)
-    where.push(`COALESCE(tc.is_panel, FALSE) = FALSE`);
-
-    // Status filter — use enum text match only after normalization
-    const mapped = normalizeStatus(status);
-    if (mapped && VALID_ITEM_STATUSES.has(mapped)) {
-      where.push(`tri.status::text = $${i}`);
-      params.push(mapped);
-      i++;
-    }
-
-    if (from) {
-      where.push(`tr.created_at >= $${i++}`);
-      params.push(from);
-    }
-    if (to) {
-      where.push(`tr.created_at <= $${i++}`);
-      params.push(to);
-    }
-
-    if (search) {
-      where.push(
-        `(p.first_name ILIKE $${i} 
-           OR p.last_name ILIKE $${i}
-           OR p.lab_id ILIKE $${i}
-           OR tr.id::text ILIKE $${i})`
-      );
-      params.push(`%${search}%`);
-      i++;
-    }
-
-    const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-
-    const sql = `
-      SELECT
-        tr.id AS request_id,
-        tr.created_at AS date_ordered,
-        p.lab_id,
-        CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
-        tc.name AS test_name,
-        tri.id AS test_item_id,
-        tri.status AS item_status,
-        tr.status AS request_status,
-        COALESCE(d.name, 'N/A') AS department_name,
-        tri.updated_at
-      FROM test_requests tr
-      JOIN patients p ON tr.patient_id = p.id
-      JOIN test_request_items tri ON tr.id = tri.test_request_id
-      JOIN test_catalog tc ON tri.test_catalog_id = tc.id
-      LEFT JOIN departments d ON tc.department_id = d.id
-      ${whereClause}
-      ORDER BY tri.updated_at DESC, tr.created_at DESC;
-    `;
-
-    const { rows } = await pool.query(sql, params);
-    res.status(200).json(rows);
-  } catch (error) {
-    console.error("❌ Error fetching worklist:", error.message);
-    res.status(500).json({ message: "Server Error" });
-  }
+const DEPT_CLUSTERS = {
+    "chemistry": ["chemistry", "clinical chemistry", "immunology", "chemical pathology"],
+    "clinical chemistry": ["chemistry", "clinical chemistry", "immunology", "chemical pathology"],
+    "immunology": ["chemistry", "clinical chemistry", "immunology", "chemical pathology"],
+    "chemical pathology": ["chemistry", "clinical chemistry", "immunology", "chemical pathology"],
+    "microbiology": ["microbiology", "serology", "virology", "parasitology"],
+    "serology": ["microbiology", "serology", "virology"],
+    "hematology": ["hematology", "haematology", "blood transfusion", "blood bank"],
+    "haematology": ["hematology", "haematology", "blood transfusion", "blood bank"]
 };
 
+function getAccessScope(userDeptName) {
+    if (!userDeptName) return [];
+    const lower = userDeptName.toLowerCase().trim();
+    if (DEPT_CLUSTERS[lower]) return DEPT_CLUSTERS[lower];
+    for (const [key, cluster] of Object.entries(DEPT_CLUSTERS)) {
+        if (lower.includes(key)) return cluster;
+    }
+    return [lower];
+}
+
+// ------------------------------------------------------------
+// 🛠️ Helper: Resolve Department Name
+// ------------------------------------------------------------
+async function resolveDeptName(deptInput) {
+  if (!deptInput) return null;
+  if (typeof deptInput === 'string' && isNaN(parseInt(deptInput))) {
+      return deptInput.trim();
+  }
+  try {
+    const { rows } = await pool.query('SELECT name FROM departments WHERE id = $1', [deptInput]);
+    return rows.length > 0 ? rows[0].name.trim() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// ------------------------------------------------------------
+// 🧮 Helper: Smart Reference Details
+// ------------------------------------------------------------
+async function getSmartRefDetails(client, analyteId, resultValue, gender = null, ageYears = null) {
+  if (!analyteId) return { text: null, flag: null };
+
+  const g = gender && typeof gender === "string"
+      ? gender.toLowerCase().startsWith("m") ? "male" : gender.toLowerCase().startsWith("f") ? "female" : null
+      : null;
+
+  const { rows } = await client.query(
+    `SELECT range_type, min_value, max_value, qualitative_value, symbol_operator, reference_range_text
+     FROM normal_ranges
+     WHERE analyte_id = $1
+       AND ($2::text IS NULL OR LOWER(gender::text) = $2::text OR gender::text = 'Any')
+       AND (min_age IS NULL OR $3::int >= min_age)
+       AND (max_age IS NULL OR $3::int <= max_age)
+     ORDER BY CASE WHEN gender::text = 'Any' THEN 1 ELSE 0 END, id ASC
+     LIMIT 1`,
+    [analyteId, g, ageYears]
+  );
+
+  if (!rows.length) return { text: null, flag: null };
+  const r = rows[0];
+  let text = null, flag = null;
+
+  const rt = (r.range_type || "").toLowerCase();
+  if (rt === "numeric") {
+    if (r.min_value != null && r.max_value != null) text = `${r.min_value} – ${r.max_value}`;
+    else if (r.min_value != null) text = `≥ ${r.min_value}`;
+    else if (r.max_value != null) text = `≤ ${r.max_value}`;
+  }
+  if (!text && r.qualitative_value) text = r.qualitative_value;
+  if (!text && r.symbol_operator && r.max_value != null) text = `${r.symbol_operator} ${r.max_value}`;
+  if (r.reference_range_text) text = text ? `${text} (${r.reference_range_text})` : r.reference_range_text;
+
+  if (resultValue !== null && resultValue !== undefined && resultValue !== "") {
+      if (rt === "numeric") {
+          const num = parseFloat(resultValue);
+          if (!isNaN(num)) {
+              if (r.min_value != null && num < r.min_value) flag = "L";
+              else if (r.max_value != null && num > r.max_value) flag = "H";
+          }
+      } else {
+          if (r.qualitative_value) {
+             const cleanRes = String(resultValue).toLowerCase().trim();
+             const cleanRef = String(r.qualitative_value).toLowerCase().trim();
+             if (cleanRes !== cleanRef && cleanRef !== "any") flag = "A"; 
+          }
+      }
+  }
+  return { text, flag };
+}
+
 // ============================================================
-// 📄 Build Result Template
+// 🔬 GET RESULT TEMPLATE (Fixed Patient Data Mapping)
 // ============================================================
 const getResultTemplate = async (req, res) => {
-  // ... (This function is unchanged)
-  const { requestId } = req.params;
-  const client = await pool.connect();
+  const requestId = parseInt(req.params.requestId, 10);
+  if (isNaN(requestId)) return res.status(400).json({ message: "Invalid Request ID" });
 
+  const { department: userDeptId, permissions_map, full_name } = req.user;
+  const isSuperAdmin = permissions_map?.["*:*"] === true;
+
+  const client = await pool.connect();
   try {
-    const { rows: allItems } = await client.query(
+    // 1. Fetch Header (Patient Info)
+    const { rows: hdr } = await client.query(
       `SELECT 
-         tri.id AS request_item_id,
-         tri.test_catalog_id AS test_id,
-         tc.name AS test_name,
-         tc.is_panel,
-         tc.department_id,
-         d.name AS department_name,
-         tri.result_value,
-         tri.status
-       FROM test_request_items tri
-       JOIN test_catalog tc ON tc.id = tri.test_catalog_id
-       LEFT JOIN departments d ON tc.department_id = d.id
-       WHERE tri.test_request_id = $1
-       ORDER BY tc.is_panel DESC, tri.id`,
+         p.first_name, p.last_name, p.lab_id, p.date_of_birth, p.gender,
+         DATE_PART('year', AGE(CURRENT_DATE, p.date_of_birth))::int AS age_years
+       FROM test_requests tr 
+       JOIN patients p ON tr.patient_id = p.id 
+       WHERE tr.id = $1`,
       [requestId]
     );
 
-    const panelItems = allItems.filter((i) => i.is_panel);
-    const standaloneItems = allItems.filter((i) => !i.is_panel);
-    const panelAnalyteIds = new Set();
-    const outputItems = [];
+    if (!hdr.length) return res.status(404).json({ message: "Request not found." });
+    const patient = hdr[0];
+    const { gender, age_years } = patient;
 
-    // Panels → expand analytes
-    for (const item of panelItems) {
-      const base = {
-        ...item,
-        analytes: [],
-        type: "quantitative",
-        qualitative_values: [],
-        ref_range: null,
-        flag: null,
-      };
+    // 2. Department Access Check
+    const params = [requestId];
+    let deptFilterQuery = "";
 
-      const { rows: analytes } = await client.query(
-        `SELECT 
-           tpa.analyte_id AS test_id,
-           a.name AS test_name,
-           u.symbol AS unit_symbol,
-           tri_a.id AS request_item_id,
-           tri_a.result_value,
-           tri_a.status
-         FROM test_panel_analytes tpa
-         JOIN test_catalog a ON a.id = tpa.analyte_id
-         LEFT JOIN units u ON u.id = a.unit_id
-         LEFT JOIN test_request_items tri_a
-           ON tri_a.parent_id = $2 AND tri_a.test_catalog_id = tpa.analyte_id
-         WHERE tpa.panel_id = $1
-         ORDER BY a.name`,
-        [item.test_id, item.request_item_id]
-      );
-
-      for (const a of analytes) {
-        panelAnalyteIds.add(a.test_id);
-        const ref = await getRefDetails(client, a.test_id, a.result_value);
-        base.analytes.push({
-          ...a,
-          ref_range: ref.ref_text,
-          type: ref.type,
-          qualitative_values: ref.qualitative_values,
-          flag: ref.flag,
-        });
-      }
-      outputItems.push(base);
+    if (!isSuperAdmin) {
+        if (!userDeptId) return res.status(403).json({ message: "No department assigned." });
+        const userDeptName = await resolveDeptName(userDeptId);
+        if (!userDeptName) return res.status(403).json({ message: "Invalid department ID." });
+        const accessScope = getAccessScope(userDeptName);
+        
+        params.push(accessScope);
+        deptFilterQuery = ` AND d.name ILIKE ANY($${params.length}) `; 
     }
 
-    // Standalone tests that are NOT part of an expanded panel
-    const remainingItems = standaloneItems.filter(
-      (i) => !panelAnalyteIds.has(i.test_id)
+    // 3. Fetch Items
+    const { rows: items } = await client.query(
+      `SELECT tri.id AS request_item_id, tri.parent_id,
+             tc.id AS test_id, tc.name AS test_name,
+             COALESCE(tc.is_panel,false) AS is_panel,
+             d.name AS department_name,
+             u.symbol AS unit_symbol, 
+             tri.result_value, tri.status,
+             tc.department_id,
+             tri.updated_at
+       FROM test_request_items tri
+       JOIN test_catalog tc ON tc.id = tri.test_catalog_id
+       LEFT JOIN departments d ON d.id = tc.department_id
+       LEFT JOIN units u ON u.id = tc.unit_id
+       WHERE tri.test_request_id = $1
+       ${deptFilterQuery} 
+       ORDER BY tri.parent_id NULLS FIRST, tc.name`,
+      params
     );
 
-    for (const item of remainingItems) {
-      const { rows: u } = await client.query(
-        `SELECT u.symbol 
-           FROM test_catalog t 
-           LEFT JOIN units u ON u.id = t.unit_id 
-         WHERE t.id = $1`,
-        [item.test_id]
-      );
+    console.log(`📊 Items fetched: ${items.length}`);
 
-      const ref = await getRefDetails(client, item.test_id, item.result_value);
-      outputItems.push({
-        ...item,
-        unit_symbol: u[0]?.symbol || null,
-        ref_range: ref.ref_text,
-        type: ref.type,
-        qualitative_values: ref.qualitative_values,
-        flag: ref.flag,
-        analytes: [],
-      });
+    if (!items.length) {
+        return res.json({ request_id: requestId, items: [] });
     }
 
-    res.json({ request_id: Number(requestId), items: outputItems });
-  } catch (e) {
-    console.error("❌ getResultTemplate error:", e.message);
-    res.status(500).json({ message: "Failed to build result template" });
+    const panels = {};
+    const general = [];
+
+    for (const item of items) {
+      if (item.is_panel && !item.parent_id) panels[item.request_item_id] = { ...item, analytes: [] };
+    }
+
+    for (const item of items) {
+      const details = await getSmartRefDetails(client, item.test_id, item.result_value, gender, age_years);
+      item.ref_range = details.text;
+      item.flag = details.flag;
+
+      if (item.parent_id && panels[item.parent_id]) {
+        panels[item.parent_id].analytes.push(item);
+      } else if (!item.is_panel && !item.parent_id) {
+        general.push(item);
+      }
+    }
+
+    // 🚀 FIX: Mapped keys to what Frontend expects
+    res.json({ 
+        request_id: requestId, 
+        patient_info: {
+            name: `${patient.first_name} ${patient.last_name}`,
+            patient_id: patient.lab_id,       // Key Fix: Frontend looks for 'patient_id', not 'lab_id'
+            date_of_birth: patient.date_of_birth, // Key Fix: Frontend looks for 'date_of_birth'
+            gender: patient.gender,
+            age: age_years
+        },
+        items: [...general, ...Object.values(panels)] 
+    });
+
+  } catch (err) {
+    console.error("❌ getResultTemplate:", err.message);
+    res.status(500).json({ message: "Server error" });
   } finally {
     client.release();
   }
 };
 
 // ============================================================
-// 🧪 Submit Result (saves value + JSONB, sets 'Completed')
+// 🧪 SUBMIT RESULT
 // ============================================================
 const submitResult = async (req, res) => {
-  // ... (This function is unchanged and already has department checks)
   const { itemId: testItemId } = req.params;
   const { result } = req.body;
-  const { id: userId, full_name, role_id, department } = req.user || {};
+  const { department: userDeptId, permissions_map } = req.user;
+  const isSuperAdmin = permissions_map?.["*:*"] === true;
 
-  if (!result || String(result).trim() === "")
-    return res.status(400).json({ message: "Result data is required." });
+  if (result === undefined || result === null) return res.status(400).json({ message: "Result required" });
 
-  const cleanResult = String(result).trim();
-  const newResultJson = JSON.stringify({ value: cleanResult });
   const client = await pool.connect();
-
   try {
     await client.query("BEGIN");
 
     const { rows } = await client.query(
-      `SELECT tri.test_request_id, tri.result_value, d.name AS department_name
-         FROM test_request_items tri
-         JOIN test_catalog tc ON tri.test_catalog_id = tc.id
-         LEFT JOIN departments d ON tc.department_id = d.id
-        WHERE tri.id = $1`,
+      `SELECT tri.test_request_id, tc.department_id, d.name AS department_name
+       FROM test_request_items tri
+       JOIN test_catalog tc ON tri.test_catalog_id = tc.id
+       LEFT JOIN departments d ON tc.department_id = d.id
+       WHERE tri.id = $1`,
       [testItemId]
     );
 
-    if (!rows.length) throw new Error("Test not found.");
+    if (!rows.length) throw new Error("Test item not found.");
+    const itemData = rows[0];
 
-    const { test_request_id, result_value, department_name } = rows[0];
-    if (role_id === 3 && department && department !== department_name)
-      throw new Error("Unauthorized for this department.");
+    if (!isSuperAdmin) {
+        const userDeptName = await resolveDeptName(userDeptId);
+        const accessScope = getAccessScope(userDeptName);
+        const targetDeptName = (itemData.department_name || "").toLowerCase();
 
+        if (!accessScope.includes(targetDeptName)) {
+            throw new Error("Permission denied: Test belongs to restricted department.");
+        }
+    }
+
+    const cleanResult = String(result).trim();
     await client.query(
       `UPDATE test_request_items
-         SET result_value = $1,
-             result_data  = $2::jsonb,
-             status       = 'Completed',
-             updated_at   = NOW()
-       WHERE id = $3`,
-      [cleanResult, newResultJson, testItemId]
+       SET result_value = $1, status = 'Completed', updated_at = NOW()
+       WHERE id = $2`,
+      [cleanResult, testItemId]
+    );
+
+    await client.query(
+      `UPDATE test_requests SET status = 'Completed' 
+       WHERE id = $1 
+       AND (SELECT COUNT(*) FROM test_request_items WHERE test_request_id = $1 AND status NOT IN ('Completed', 'Verified', 'Cancelled')) = 0`,
+      [itemData.test_request_id]
     );
 
     await client.query("COMMIT");
 
-    emitToDepartment(req, department_name, "result_saved", {
-      event: "result_saved",
-      request_id: test_request_id,
-      test_item_id: testItemId,
-      department: department_name,
-      updated_by: full_name,
-      timestamp: new Date().toISOString(),
-      message: `${full_name} saved a result.`,
-    });
+    try {
+       if (emitToDepartment) {
+           emitToDepartment(req, itemData.department_name, "test_status_updated", {
+               request_id: itemData.test_request_id,
+               test_item_id: testItemId
+           });
+       }
+    } catch(e) {}
 
-    res.status(200).json({ message: "✅ Result saved successfully." });
+    res.json({ message: "✅ Result saved." });
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("❌ Error submitting result:", error.message);
-    res.status(400).json({ message: error.message });
+    const status = error.message.includes("Permission") ? 403 : 500;
+    res.status(status).json({ message: error.message });
   } finally {
     client.release();
   }
 };
 
 // ============================================================
-// ✅ Verify Result (marks item Verified; completes request if all verified)
+// ✅ VERIFY RESULT
 // ============================================================
 const verifyResult = async (req, res) => {
-  // ... (This function is unchanged)
   const { itemId: id } = req.params;
-  const { full_name, department } = req.user || {};
-  const client = await pool.connect();
+  const { full_name, department: userDeptId, permissions_map, roles, role_name } = req.user;
+  const isSuperAdmin = permissions_map?.["*:*"] === true;
 
+  const userRoles = (roles || []).map(r => r.toLowerCase());
+  if (role_name) userRoles.push(role_name.toLowerCase());
+  const isSenior = userRoles.some(r => r.includes("admin") || r.includes("pathologist") || r.includes("scientist") || r.includes("hematologist"));
+
+  if (!isSuperAdmin && !isSenior) return res.status(403).json({ message: "Permission denied" });
+
+  const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
     const { rows } = await client.query(
-      `SELECT result_value, test_request_id FROM test_request_items WHERE id = $1`,
-      [id]
+        `SELECT tri.test_request_id, d.name AS department_name 
+         FROM test_request_items tri
+         JOIN test_catalog tc ON tri.test_catalog_id = tc.id
+         LEFT JOIN departments d ON tc.department_id = d.id
+         WHERE tri.id = $1`, 
+        [id]
     );
-    if (!rows.length)
-      return res.status(404).json({ message: "Test not found" });
 
-    if (!rows[0].result_value)
-      return res
-        .status(400)
-        .json({ message: "Cannot verify: missing result value." });
+    if (!rows.length) throw new Error("Test not found");
+    const { test_request_id, department_name } = rows[0];
 
-    const testRequestId = rows[0].test_request_id;
+    if (!isSuperAdmin) {
+        const userDeptName = await resolveDeptName(userDeptId);
+        const accessScope = getAccessScope(userDeptName);
+        const targetDeptName = (department_name || "").toLowerCase();
+
+        if (!accessScope.includes(targetDeptName)) {
+            throw new Error("Permission denied: Cannot verify tests outside your cluster.");
+        }
+    }
 
     await client.query(
       `UPDATE test_request_items
-         SET status = 'Verified',
-             verified_name = $1,
-             verified_at = NOW(),
-             updated_at = NOW()
+       SET status = 'Verified', verified_name = $1, verified_at = NOW(), updated_at = NOW()
        WHERE id = $2`,
       [full_name, id]
     );
 
-    const { rows: check } = await client.query(
-      `SELECT COUNT(*) FILTER (WHERE status <> 'Verified') AS unverified
-         FROM test_request_items WHERE test_request_id = $1`,
-      [testRequestId]
+    await client.query(
+        `UPDATE test_requests SET status = 'Verified' 
+         WHERE id = $1 
+         AND (SELECT COUNT(*) FROM test_request_items WHERE test_request_id = $1 AND status != 'Verified') = 0`,
+        [test_request_id]
     );
 
-    if (parseInt(check[0].unverified, 10) === 0) {
-      await client.query(
-        `UPDATE test_requests SET status = 'Completed', updated_at = NOW() WHERE id = $1`,
-        [testRequestId]
-      );
-    }
-
     await client.query("COMMIT");
+    res.json({ message: "✅ Verified." });
 
-    emitToDepartment(req, department, "result_verified", {
-      event: "result_verified",
-      test_item_id: id,
-      request_id: testRequestId,
-      verified_by: full_name,
-      timestamp: new Date().toISOString(),
-    });
-
-    res.status(200).json({ message: "✅ Result verified." });
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("❌ Verify error:", error.message);
-    res.status(500).json({ message: "Server Error" });
+    const status = error.message.includes("Permission") ? 403 : 500;
+    res.status(status).json({ message: error.message });
   } finally {
     client.release();
   }
 };
 
 // ============================================================
-// 🔓 Reopen (sets 'Reopened')
-// ============================================================
-const reopenResult = async (req, res) => {
-  // ... (This function is unchanged)
-  const { itemId: id } = req.params;
-  const { department, full_name } = req.user || {};
-
-  try {
-    const { rows } = await pool.query(
-      `UPDATE test_request_items
-         SET status = 'Reopened',
-             verified_name = NULL,
-             verified_at = NULL,
-             updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [id]
-    );
-
-    if (!rows.length)
-      return res.status(404).json({ message: "Item not found" });
-
-    emitToDepartment(req, department, "test_reopened", {
-      event: "test_reopened",
-      test_item_id: id,
-      request_id: rows[0].test_request_id,
-      department,
-      reopened_by: full_name,
-      timestamp: new Date().toISOString(),
-    });
-
-    res.status(200).json({ message: "🔓 Item reopened.", item: rows[0] });
-  } catch (e) {
-    console.error("❌ Reopen error:", e.message);
-    res.status(500).json({ message: "Server Error" });
-  }
-};
-
-// ============================================================
-// 📝 Mark Under Review (CLAIMS ASSIGNMENT, uses enum 'UnderReview')
-// ============================================================
-const markResultForReview = async (req, res) => {
-  // ... (This function is unchanged)
-  const { itemId: id } = req.params;
-  const { id: userId, full_name, department } = req.user || {}; 
-
-  try {
-    const { rows } = await pool.query(
-      `UPDATE test_request_items
-         SET status = 'UnderReview',
-             reviewed_by_name = $1, 
-             reviewed_by_id = $2, 
-             reviewed_at = NOW(),
-             updated_at = NOW()
-       WHERE id = $3
-       RETURNING *`,
-      [full_name, userId, id]
-    );
-
-    if (!rows.length)
-      return res.status(4404).json({ message: "Test not found" });
-
-    emitToDepartment(req, department, "result_reviewed", {
-      event: "result_reviewed",
-      test_item_id: id,
-      request_id: rows[0].test_request_id,
-      department,
-      reviewed_by: full_name,
-      timestamp: new Date().toISOString(),
-    });
-
-    res.status(200).json({ message: "✅ Result marked Under Review." });
-  } catch (e) {
-    console.error("❌ Review error:", e.message);
-    res.status(500).json({ message: "Server Error" });
-  }
-};
-
-// ============================================================
-// 🚀 Release Report (request-level)
-// ============================================================
-const releaseReport = async (req, res) => {
-  // ... (This function is unchanged)
-  const { requestId } = req.params;
-  const { department } = req.user || {};
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const { rowCount } = await client.query(
-      `SELECT 1 FROM test_requests WHERE id = $1`,
-      [requestId]
-    );
-    if (!rowCount)
-      return res.status(404).json({ message: "Request not found" });
-
-    await client.query(
-      `UPDATE test_request_items
-         SET status = 'Released', updated_at = NOW()
-       WHERE test_request_id = $1
-         AND status IN ('Completed','Verified','UnderReview')`,
-      [requestId]
-    );
-
-    await client.query(
-      `UPDATE test_requests SET status = 'Released', updated_at = NOW() WHERE id = $1`,
-      [requestId]
-    );
-
-    await client.query("COMMIT");
-
-    emitToDepartment(req, department, "report_released", {
-      event: "report_released",
-      request_id: requestId,
-      department,
-      timestamp: new Date().toISOString(),
-      message: "Report released.",
-    });
-
-    res.status(200).json({ message: "✅ Report released." });
-  } catch (e) {
-    await client.query("ROLLBACK");
-    console.error("❌ Release error:", e.message);
-    
-    if (e.message.includes('invalid input value for enum test_request_status')) {
-        console.warn("WARN: test_request_status ENUM likely missing 'Released'. Consider adding it to your schema.");
-    }
-    
-    res.status(500).json({ message: "Server Error" });
-  } finally {
-    client.release();
-  }
-};
-
-// ============================================================
-// 📊 Status Counts (optionally scoped by department)
+// 📊 STATUS COUNTS
 // ============================================================
 const getStatusCounts = async (req, res) => {
-  // ✅ **FIX 3: Updated to use new permission system**
-  const { department: userDepartment, permissions_map } = req.user || {};
+  const { department: userDeptId, permissions_map } = req.user;
   const isSuperAdmin = permissions_map?.["*:*"] === true;
-  
-  try {
-    const where = [];
-    const params = [];
 
-    // Filter by department if user is NOT a super admin and HAS a department
-    if (!isSuperAdmin && userDepartment) {
-      where.push("d.name = $1");
-      params.push(userDepartment);
-    } else if (!isSuperAdmin && !userDepartment) {
-      // No admin, no dept = see nothing
-      return res.status(200).json({});
+  try {
+    const params = [];
+    let deptFilter = "";
+
+    if (!isSuperAdmin) {
+       if (!userDeptId) return res.json({});
+       const userDeptName = await resolveDeptName(userDeptId);
+       const accessScope = getAccessScope(userDeptName);
+       params.push(accessScope);
+       deptFilter = ` AND d.name ILIKE ANY($${params.length}) `;
     }
 
-    const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-
     const sql = `
-      SELECT tri.status, COUNT(tri.id) AS count
-        FROM test_request_items tri
-        JOIN test_catalog tc ON tri.test_catalog_id = tc.id
-        LEFT JOIN departments d ON tc.department_id = d.id
-      ${clause}
+      SELECT tri.status, COUNT(tri.id)::int AS count
+      FROM test_request_items tri
+      JOIN test_catalog tc ON tri.test_catalog_id = tc.id
+      LEFT JOIN departments d ON tc.department_id = d.id
+      WHERE 1=1 ${deptFilter}
       GROUP BY tri.status
     `;
 
     const { rows } = await pool.query(sql, params);
-    const counts = {};
-    rows.forEach((r) => (counts[String(r.status).toLowerCase()] = parseInt(r.count, 10)));
-
-    res.status(200).json(counts);
-  } catch (e) {
-    console.error("❌ Status count error:", e.message);
-    res.status(500).json({ message: "Server Error" });
-  }
-};
-
-// ============================================================
-// 🧾 Result History (if table exists)
-// ============================================================
-const getResultHistory = async (req, res) => {
-  // ... (This function is unchanged)
-  const { itemId: id } = req.params;
-  try {
-    const { rows } = await pool.query(
-      `SELECT ral.old_result, ral.new_result, ral.changed_at, u.full_name AS changed_by
-         FROM result_audit_logs ral
-         LEFT JOIN users u ON ral.changed_by = u.id
-        WHERE ral.test_item_id = $1
-        ORDER BY ral.changed_at DESC`,
-      [id]
-    );
-    res.status(200).json(rows);
-  } catch (e) {
-    console.error("❌ History error:", e.message);
-    res.status(500).json({ message: "Server Error" });
-  }
-};
-
-// ============================================================
-// 🔬 Analyzer Results (optional integration)
-// ============================================================
-const getAnalyzerResults = async (req, res) => {
-  // ... (This function is unchanged)
-  try {
-    const id = parseInt(req.params.itemId, 10);
-    if (!Number.isFinite(id))
-      return res.status(400).json({ message: "Invalid testItemId" });
-
-    const { rows } = await pool.query(
-      `SELECT test_item_id, instrument, sample_id, results, analyzer_meta, updated_at
-         FROM test_item_results WHERE test_item_id = $1`,
-      [id]
-    );
-    if (!rows.length)
-      return res.status(404).json({ message: "No analyzer results" });
-    res.json(rows[0]);
-  } catch (e) {
-    console.error("❌ Analyzer error:", e.message);
-    res.status(500).json({ message: "Server Error" });
-  }
-};
-
-// ============================================================
-// ♻️ Update Item Status (validates enum)
-// ============================================================
-const updateRequestItemStatus = async (req, res) => {
-  // ... (This function is unchanged)
-  const { itemId } = req.params;
-  const { status } = req.body;
-  const { full_name, department } = req.user || {};
-
-  if (!status) return res.status(400).json({ message: "Status is required." });
-
-  const normalized = normalizeStatus(status);
-  if (!normalized || !VALID_ITEM_STATUSES.has(normalized)) {
-    return res.status(400).json({ message: `Invalid status: ${status}` });
-  }
-
-  try {
-    const { rows } = await pool.query(
-      `UPDATE test_request_items
-         SET status = $1, updated_at = NOW()
-       WHERE id = $2
-       RETURNING test_request_id, id`,
-      [normalized, itemId]
-    );
-    if (!rows.length)
-      return res.status(404).json({ message: "Item not found" });
-
-    emitToDepartment(req, department, "status_updated", {
-      event: "item_status_updated",
-      test_item_id: rows[0].id,
-      request_id: rows[0].test_request_id,
-      department,
-      updated_by: full_name,
-      new_status: normalized,
+    const counts = { sample_collected:0, in_progress:0, completed:0, verified:0, released:0 };
+    
+    rows.forEach(r => {
+       let k = r.status.toLowerCase().replace(/\s/g, "_");
+       if (k === 'samplereceived') k = 'sample_collected';
+       if (k === 'pending') k = 'in_progress';
+       if (counts[k] !== undefined) counts[k] += r.count;
     });
 
-    res.status(200).json({ message: `✅ Status updated to ${normalized}.` });
+    res.json(counts);
   } catch (e) {
-    console.error("❌ Status update error:", e.message);
     res.status(500).json({ message: "Server Error" });
   }
+};
+
+// ============================================================
+// 📋 WORKLIST
+// ============================================================
+const getPathologistWorklist = async (req, res) => {
+  const { status, search, sortBy = 'updated_at', order = 'desc' } = req.query;
+  const { department: userDeptId, permissions_map } = req.user;
+  const isSuperAdmin = permissions_map?.["*:*"] === true;
+
+  try {
+    const params = [];
+    let whereClause = "WHERE 1=1";
+
+    if (!isSuperAdmin) {
+       if (!userDeptId) return res.json([]);
+       const userDeptName = await resolveDeptName(userDeptId);
+       const accessScope = getAccessScope(userDeptName);
+       params.push(accessScope);
+       whereClause += ` AND d.name ILIKE ANY($${params.length}) `;
+    }
+
+    if (status) {
+       let dbStatus = status;
+       if (status === 'sample_collected') dbStatus = 'SampleReceived';
+       if (status === 'verified') dbStatus = 'Verified';
+       if (status === 'in_progress') dbStatus = 'Pending';
+       params.push(dbStatus);
+       whereClause += ` AND tri.status = $${params.length} `;
+    }
+
+    if (search) {
+       params.push(`%${search}%`);
+       whereClause += ` AND (p.first_name ILIKE $${params.length} OR p.last_name ILIKE $${params.length} OR p.lab_id ILIKE $${params.length}) `;
+    }
+
+    const sortCol = sortBy === 'patient_name' ? 'p.last_name' : 'tri.updated_at';
+    const sortDir = order === 'asc' ? 'ASC' : 'DESC';
+
+    const sql = `
+      SELECT 
+        tri.id AS test_item_id,
+        tr.id AS request_id,
+        tr.created_at,
+        tri.updated_at,
+        tri.status AS item_status,
+        tc.name AS test_name,
+        p.lab_id,
+        CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+        d.name AS department
+      FROM test_request_items tri
+      JOIN test_requests tr ON tri.test_request_id = tr.id
+      JOIN patients p ON tr.patient_id = p.id
+      JOIN test_catalog tc ON tri.test_catalog_id = tc.id
+      LEFT JOIN departments d ON tc.department_id = d.id
+      ${whereClause}
+      ORDER BY ${sortCol} ${sortDir} LIMIT 100
+    `;
+
+    const { rows } = await pool.query(sql, params);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ============================================================
+// ♻️ UPDATE ITEM STATUS
+// ============================================================
+const updateRequestItemStatus = async (req, res) => {
+  const { itemId } = req.params;
+  const { status } = req.body;
+  const { department: userDeptId, permissions_map } = req.user;
+  const isSuperAdmin = permissions_map?.["*:*"] === true;
+
+  if (!status) return res.status(400).json({ message: "Status required" });
+
+  try {
+     if (!isSuperAdmin) {
+        const check = await pool.query(`SELECT d.name AS department_name FROM test_request_items tri JOIN test_catalog tc ON tri.test_catalog_id = tc.id LEFT JOIN departments d ON tc.department_id = d.id WHERE tri.id = $1`, [itemId]);
+        if (!check.rows.length) return res.status(404).json({message:"Not found"});
+        
+        const userDeptName = await resolveDeptName(userDeptId);
+        const accessScope = getAccessScope(userDeptName);
+        
+        if (!accessScope.includes(check.rows[0].department_name.toLowerCase())) {
+            return res.status(403).json({ message: "Permission denied" });
+        }
+     }
+
+     await pool.query(`UPDATE test_request_items SET status = $1, updated_at = NOW() WHERE id = $2`, [status, itemId]);
+     res.json({ message: "Status updated" });
+  } catch (e) {
+     res.status(500).json({ message: "Server Error" });
+  }
+};
+
+const reopenResult = async (req, res) => {
+  req.body.status = "Reopened";
+  return updateRequestItemStatus(req, res);
+};
+
+const markResultForReview = async (req, res) => {
+  req.body.status = "UnderReview";
+  return updateRequestItemStatus(req, res);
+};
+
+const getResultHistory = async (req, res) => {
+   try {
+       const { itemId } = req.params;
+       const { rows } = await pool.query(
+           `SELECT * FROM result_audit_logs WHERE test_item_id = $1 ORDER BY created_at DESC`, 
+           [itemId]
+       );
+       res.json(rows);
+   } catch(e) { res.json([]); }
+};
+
+const getAnalyzerResults = async (req, res) => {
+   res.status(404).json({ message: "No analyzer data" });
+};
+
+const releaseReport = async (req, res) => {
+   res.status(400).json({ message: "Use /api/test-requests/:id/status to release." });
 };
 
 module.exports = {
-  getPathologistWorklist,
   getResultTemplate,
   submitResult,
   verifyResult,
+  getStatusCounts,
+  getPathologistWorklist,
+  updateRequestItemStatus,
   reopenResult,
   markResultForReview,
-  releaseReport,
-  getStatusCounts,
   getResultHistory,
   getAnalyzerResults,
-  updateRequestItemStatus,
+  releaseReport
 };

@@ -1,32 +1,15 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { 
-  getAllCompletedReports, 
-  getReportByRequestId 
-} = require('../controllers/reportController'); // ✅ controller import
-const { protect, authorize } = require('../middleware/authMiddleware');
+const { protect } = require("../middleware/authMiddleware");
+const { getAllReports, getReportByRequestId } = require("../controllers/reportController");
 
-/**
- * ==========================================================
- * @route   GET /api/reports
- * @desc    Get all completed lab reports with filters
- * @access  Private (Role/Permission-based)
- * ==========================================================
- */
-router.get('/', protect, authorize('reports', 'view'), getAllCompletedReports);
+// Apply protection (auth check) to all routes in this file
+router.use(protect);
 
-/**
- * ==========================================================
- * @route   GET /api/reports/test-request/:id
- * @desc    Get full report detail by Test Request ID
- * @access  Private (Role/Permission-based)
- * ==========================================================
- */
-router.get(
-  '/test-request/:id',
-  protect,
-  authorize('reports', 'view'),
-  getReportByRequestId
-);
+// ✅ GET /api/reports/ - Fetches the list of all completed reports for the archive page
+router.get("/", getAllReports);
+
+// ✅ GET /api/reports/request/:id - Fetches details for a single report to print/view
+router.get("/request/:id", getReportByRequestId);
 
 module.exports = router;

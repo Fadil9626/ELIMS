@@ -1,319 +1,422 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Play,
-  Eye,
-  RefreshCw,
-  Search, // Add Search icon for filter bar
-  Beaker, // Add Beaker icon for worklist title
+  FlaskConical,
+  FileCheck2,
+  FileText,
+  RefreshCw,
+  Search,
+  Filter,
+  ChevronDown,
+  ChevronUp,
+  Beaker,
+  BadgeCheck,
+  Info,
+  Play,
+  Eye,
 } from "lucide-react";
-import toast from "react-hot-toast";
 
-import pathologistService from "../../services/pathologistService";
-import { useAuth } from "../../context/AuthContext"; // ✅ UNCOMMENTED useAuth
-import { useSocket } from "../../context/SocketContext";
+// ==================================================================================
+// 🔧 SELF-CONTAINED SERVICE & AUTH (Internal)
+// ==================================================================================
 
-// ------------------------------------------------------------
-// STATUS COLORS & BADGES (omitted for brevity)
-// ------------------------------------------------------------
-const getStatusClass = (status) => {
-  if (!status) return "bg-gray-200 text-gray-800";
-  switch (status.toLowerCase().replace(/\s/g, "")) {
-    case "samplecollected":
-      return "bg-blue-200 text-blue-800";
-    case "inprogress":
-      return "bg-purple-200 text-purple-800";
-    case "completed":
-      return "bg-yellow-200 text-yellow-800";
-    case "underreview":
-      return "bg-cyan-200 text-cyan-800";
-    case "reopened":
-      return "bg-orange-200 text-orange-800";
-    case "verified":
-      return "bg-green-200 text-green-800";
-    case "released":
-      return "bg-gray-200 text-gray-800";
-    default:
-      return "bg-gray-200 text-gray-800";
-  }
+const apiFetch = async (url, options = {}) => {
+  let token = "";
+  try {
+    const raw = localStorage.getItem("elims_auth_v1");
+    if (raw) token = JSON.parse(raw)?.token || "";
+  } catch (e) {}
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    ...(options.body ? { "Content-Type": "application/json" } : {}),
+    ...(options.headers || {}),
+  };
+
+  const res = await fetch(url, { ...options, headers });
+  const text = await res.text();
+
+  if (!res.ok) throw new Error(`API Error: ${res.status}`);
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return text;
+  }
 };
 
-const StatusBadge = ({ label, count = 0, color }) => {
-  const colors = {
-    blue: "bg-blue-100 text-blue-800",
-    purple: "bg-purple-100 text-purple-800",
-    yellow: "bg-yellow-100 text-yellow-800",
-    teal: "bg-teal-100 text-teal-800",
-    gray: "bg-gray-100 text-gray-800",
-  };
-  return (
-    <div className={`flex items-center justify-between p-3 rounded-lg shadow-sm ${colors[color] || colors.gray}`}>
-      <span className="font-semibold">{label}:</span>
-      <span className="font-bold text-xl">{count}</span>
-    </div>
-  );
+const pathologistService = {
+  getStatusCounts: async () => apiFetch("/api/pathologist/status-counts"),
+  getWorklist: async (filters = {}) => {
+    const cleanFilters = Object.fromEntries(
+      Object.entries(filters).filter(
+        ([_, v]) => v !== undefined && v !== null && v !== ""
+      )
+    );
+    const query = new URLSearchParams(cleanFilters).toString();
+    return apiFetch(`/api/pathologist/worklist?${query}`);
+  },
 };
 
-// ------------------------------------------------------------
-// PAGE COMPONENT
-// ------------------------------------------------------------
+const useAuthInternal = () => {
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("elims_auth_v1");
+      if (raw) setUser(JSON.parse(raw).user);
+    } catch (e) {}
+  }, []);
+
+  const can = (res, act) => {
+    const map = user?.permissions_map || {};
+    if (map["*:*"]) return true;
+    const key = `${res}:${act}`.toLowerCase();
+    return !!map[key];
+  };
+
+  return { user, can };
+};
+
+// ==================================================================================
+// COMPONENT
+// ==================================================================================
+
+const cn = (...classes) => classes.filter(Boolean).join(" ");
+
 const PathologistWorklistPage = () => {
-  const navigate = useNavigate();
-  const { socket } = useSocket();
-  const { user } = useAuth(); // ✅ Using useAuth for stable user data
+  const navigate = useNavigate();
+  const { user, can } = useAuthInternal();
 
-  const token = JSON.parse(localStorage.getItem("userInfo") || "{}")?.token || null;
-  
-  // ✅ FIX 1: Defined state for filters
-  const [worklist, setWorklist] = useState([]);
-  const [statusCounts, setStatusCounts] = useState({});
-  const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState({ 
-    from: "", 
-    to: "", 
-    status: "All", 
-    search: "",
-  });
+  // Permissions
+  const canEnter = can("pathologist", "enter") || can("results", "enter");
+  const canVerify = can("pathology", "verify");
+  const canOnlyView = !canEnter && !canVerify;
 
-  // Helper for department filtering (uses user from useAuth)
-  const userDept = user?.department;
-  const roleId = user?.role_id;
+  // Filters & data
+  const [filters, setFilters] = useState({
+    status: "",
+    order: "desc",
+    sortBy: "updated_at",
+    search: "",
+  });
+  const [worklist, setWorklist] = useState([]);
+  const [counts, setCounts] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [expandedFilters, setExpandedFilters] = useState(false);
 
-  // ------------------------------------------------------------
-  // LOAD WORKLIST
-  // ------------------------------------------------------------
-  // ❗ FIX 2: loadWorklist MUST depend on 'filters'
-  const loadWorklist = useCallback(async () => {
-    if (!token) return;
-    try {
-      setLoading(true);
+  const loadData = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const [c, w] = await Promise.all([
+        pathologistService.getStatusCounts(),
+        pathologistService.getWorklist(filters),
+      ]);
+      setCounts(c || {});
+      setWorklist(Array.isArray(w) ? w : []);
+    } catch (e) {
+      console.error("Load Error:", e);
+      // Optional: toast or silent
+    } finally {
+      setLoading(false);
+    }
+  }, [user, filters]);
 
-      // Pass filters object to the service layer
-      const [worklistData, countsData] = await Promise.all([
-        pathologistService.getWorklist(token, filters),
-        pathologistService.getStatusCounts(token),
-      ]);
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
-      // Client-side filtering logic remains for non-SuperAdmin/non-Dept users
-      const filteredData = (roleId > 2 && userDept)
-        ? worklistData.filter(item => item.department_name === userDept)
-        : worklistData;
+  // Navigation Logic (entry vs review page)
+  const handleNavigation = (row) => {
+    const norm = (row.item_status || row.test_status || "")
+      .toLowerCase()
+      .replace(/\s/g, "");
 
-      setWorklist(filteredData);
-      setStatusCounts(countsData);
-    } catch (err) {
-      toast.error(err.message || "Failed to load worklist");
-    } finally {
-      setLoading(false);
-    }
-    // ❗ Dependencies MUST include filters to recreate function when filters change
-  }, [token, filters, userDept, roleId]); 
+    const isReviewState = ["completed", "underreview", "verified", "released"].includes(
+      norm
+    );
 
-  // ------------------------------------------------------------
-  // DEBOUNCE TRIGGER (The Fix for the Update Bug)
-  // ------------------------------------------------------------
-  useEffect(() => {
-    // This useEffect now watches the 'filters' object.
-    const debounceTimer = setTimeout(() => {
-      loadWorklist();
-    }, 400); 
+    if (isReviewState) {
+      navigate(`/pathologist/review/${row.request_id}`);
+    } else {
+      navigate(`/pathologist/results/${row.request_id}`);
+    }
+  };
 
-    return () => clearTimeout(debounceTimer);
-    // ❗ FIX 3: Dependency array includes filters
-  }, [filters, loadWorklist]); 
+  const statusPills = [
+    {
+      key: "sample_collected",
+      label: "Ready for Result",
+      icon: Beaker,
+      value: counts.sample_collected || 0,
+    },
+    {
+      key: "in_progress",
+      label: "In Progress",
+      icon: FlaskConical,
+      value: counts.in_progress || 0,
+    },
+    {
+      key: "completed",
+      label: "To Verify",
+      icon: FileCheck2,
+      value: counts.completed || 0,
+    },
+    {
+      key: "verified",
+      label: "Verified",
+      icon: BadgeCheck,
+      value: counts.verified || 0,
+    },
+    {
+      key: "released",
+      label: "Released",
+      icon: FileText,
+      value: counts.released || 0,
+    },
+  ];
 
-  // ------------------------------------------------------------
-  // REALTIME SOCKET UPDATES
-  // ------------------------------------------------------------
-  useEffect(() => {
-    if (!socket) return;
-    const update = () => loadWorklist();
-    socket.on("new_test_request", update);
-    socket.on("test_status_updated", update);
-    return () => {
-      socket.off("new_test_request", update);
-      socket.off("test_status_updated", update);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket, loadWorklist]);
+  if (!user)
+    return (
+      <div className="p-12 text-center text-gray-500">Loading session...</div>
+    );
 
-  // ------------------------------------------------------------
-  // ACTION HANDLERS
-  // ------------------------------------------------------------
-  const handleFilterChange = (e) => {
-    // ✅ This updates the state, which triggers the useEffect debounce
-    setFilters({ ...filters, [e.target.name]: e.target.value });
-  };
-  
-  const handleAnalyze = (requestId: any) => navigate(`/pathologist/results/${requestId}`);
+  return (
+    <div className="p-6 space-y-6 bg-gray-50 min-h-screen">
+      {/* Header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-gray-900">
+            Lab Worklist
+          </h1>
+          <div className="text-sm text-gray-500 flex items-center gap-2 mt-1">
+            <Info size={14} />
+            <span>
+              Viewing as:{" "}
+              <span className="font-medium">
+                {user.full_name || user.name || user.email}
+              </span>{" "}
+              ({user.department || "General"})
+            </span>
+          </div>
+        </div>
+        <button
+          onClick={loadData}
+          className="inline-flex items-center gap-2 rounded-xl px-4 py-2 bg-white border shadow-sm hover:bg-gray-50 transition-colors"
+        >
+          <RefreshCw
+            className={cn("h-4 w-4", loading && "animate-spin text-blue-600")}
+          />{" "}
+          Refresh
+        </button>
+      </div>
 
-  const handleReviewNavigation = (requestId: any) =>
-    navigate(`/pathologist/review/${requestId}`);
+      {/* Status cards */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        {statusPills.map((p) => (
+          <button
+            type="button"
+            key={p.key}
+            className={cn(
+              "rounded-xl bg-white border p-4 shadow-sm flex items-center gap-4 cursor-pointer hover:shadow-md transition-all",
+              filters.status === p.key && "ring-2 ring-blue-500 border-blue-300"
+            )}
+            onClick={() =>
+              setFilters((f) => ({
+                ...f,
+                status: f.status === p.key ? "" : p.key,
+              }))
+            }
+          >
+            <div className="p-2 bg-gray-50 rounded-lg text-gray-600">
+              <p.icon className="h-6 w-6" />
+            </div>
+            <div className="text-left">
+              <div className="text-xs font-medium text-gray-500 uppercase">
+                {p.label}
+              </div>
+              <div className="text-2xl font-bold text-gray-900">{p.value}</div>
+            </div>
+          </button>
+        ))}
+      </div>
 
-  const handleMarkForReview = async (testItemId: number, requestId: any) => {
-    try {
-      await pathologistService.markForReview(token, testItemId);
-      toast.success("Marked for review.");
-      handleReviewNavigation(requestId);
-      loadWorklist();
-    } catch (err) {
-      toast.error(err.message || "Failed to mark for review.");
-    }
-  };
+      {/* Filters */}
+      <div className="rounded-xl bg-white border p-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative grow max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input
+              placeholder="Search patient, lab ID..."
+              value={filters.search}
+              onChange={(e) =>
+                setFilters((f) => ({ ...f, search: e.target.value }))
+              }
+              className="w-full rounded-lg border pl-9 pr-3 py-2 text-sm outline-none focus:ring-2 ring-blue-500"
+            />
+          </div>
+          <button
+            onClick={() => setExpandedFilters((v) => !v)}
+            className="ml-auto inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-gray-50 hover:bg-gray-100"
+          >
+            <Filter className="h-4 w-4" /> Filters{" "}
+            {expandedFilters ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
+          </button>
+        </div>
+        {expandedFilters && (
+          <div className="mt-4 pt-4 border-t grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="text-xs font-semibold text-gray-500 block mb-1">
+                Status
+              </label>
+              <select
+                value={filters.status}
+                onChange={(e) =>
+                  setFilters((f) => ({ ...f, status: e.target.value }))
+                }
+                className="w-full border rounded-lg p-2 text-sm"
+              >
+                <option value="">All</option>
+                {/* ✅ keep keys aligned with backend & statusCounts */}
+                <option value="sample_collected">Sample Collected</option>
+                <option value="in_progress">In Progress</option>
+                <option value="completed">Completed</option>
+                <option value="verified">Verified</option>
+                <option value="released">Released</option>
+              </select>
+            </div>
+          </div>
+        )}
+      </div>
 
-  // ------------------------------------------------------------
-  // RENDER
-  // ------------------------------------------------------------
-  return (
-    <div className="p-6 space-y-6">
+      {/* Table */}
+      <div className="rounded-xl bg-white border overflow-hidden shadow-sm">
+        <table className="min-w-full text-sm text-left">
+          <thead className="bg-gray-50 border-b text-gray-500 font-medium">
+            <tr>
+              <th className="px-6 py-3">Patient</th>
+              <th className="px-6 py-3">Lab ID</th>
+              <th className="px-6 py-3">Test</th>
+              <th className="px-6 py-3">Status</th>
+              <th className="px-6 py-3 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {loading && (
+              <tr>
+                <td colSpan={5} className="p-8 text-center text-gray-500">
+                  Loading...
+                </td>
+              </tr>
+            )}
+            {!loading && worklist.length === 0 && (
+              <tr>
+                <td colSpan={5} className="p-8 text-center text-gray-500">
+                  No items found.
+                </td>
+              </tr>
+            )}
 
-      {/* HEADER */}
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <Beaker className="w-8 h-8 text-blue-600" /> Pathologist Worklist
-        </h1>
-        <button onClick={loadWorklist} className="p-2 rounded hover:bg-gray-100">
-          <RefreshCw className={loading ? "animate-spin w-5 h-5" : "w-5 h-5"} />
-        </button>
-      </div>
+            {!loading &&
+              worklist.map((row) => {
+                const normStatus = (row.item_status || row.test_status || "")
+                  .toLowerCase()
+                  .replace(/\s/g, "");
 
-      {/* ❗ FIX 4: FILTER INPUTS ADDED */}
-      <div className="bg-white p-4 rounded-lg shadow-md border border-gray-200">
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">From</label>
-            <input
-              type="date"
-              name="from"
-              value={filters.from}
-              onChange={handleFilterChange}
-              className="mt-1 p-2 w-full border rounded-md"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">To</label>
-            <input
-              type="date"
-              name="to"
-              value={filters.to}
-              onChange={handleFilterChange}
-              className="mt-1 p-2 w-full border rounded-md"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Status</label>
-            <select
-              name="status"
-              value={filters.status}
-              onChange={handleFilterChange}
-              className="mt-1 p-2 w-full border rounded-md"
-            >
-              <option value="All">All</option>
-              <option value="Sample Collected">Sample Collected</option>
-              <option value="In Progress">In Progress</option>
-              <option value="Reopened">Reopened</option>
-              <option value="Completed">Completed</option>
-              <option value="Under Review">Under Review</option>
-              <option value="Verified">Verified</option>
-              <option value="Released">Released</option>
-            </select>
-          </div>
-          <div className="md:col-span-3">
-            <label className="block text-sm font-medium text-gray-700">Search</label>
-            <div className="relative">
-              <input
-                type="text"
-                name="search"
-                placeholder="Search by patient name or Lab ID..."
-                value={filters.search}
-                onChange={handleFilterChange}
-                className="mt-1 p-2 pl-10 w-full border rounded-md"
-              />
-              <Search className="absolute top-3 left-3 text-gray-400 w-5 h-5" />
-            </div>
-          </div>
-        </div>
-      </div>
+                const isReviewState = [
+                  "completed",
+                  "underreview",
+                  "verified",
+                  "released",
+                ].includes(normStatus);
 
-      {/* STATUS SUMMARY */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatusBadge label="Sample Collected" count={statusCounts.samplecollected} color="blue" />
-        <StatusBadge label="In Progress" count={statusCounts.inprogress} color="purple" />
-        <StatusBadge label="Completed" count={statusCounts.completed} color="yellow" />
-        <StatusBadge label="Verified" count={statusCounts.verified} color="teal" />
-        <StatusBadge label="Released" count={statusCounts.released} color="gray" />
-      </div>
+                const statusBadgeClass =
+                  row.item_status === "Completed"
+                    ? "bg-purple-100 text-purple-800 border-purple-200"
+                    : row.item_status === "Verified"
+                    ? "bg-green-100 text-green-800 border-green-200"
+                    : row.item_status === "SampleReceived"
+                    ? "bg-blue-100 text-blue-800 border-blue-200"
+                    : row.item_status === "Released"
+                    ? "bg-teal-100 text-teal-800 border-teal-200"
+                    : "bg-yellow-100 text-yellow-800 border-yellow-200";
 
-      {/* TABLE */}
-      <div className="bg-white rounded shadow overflow-hidden">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="p-3">Date</th>
-              <th className="p-3">Patient</th>
-              <th className="p-3">Test</th>
-              <th className="p-3">Dept</th>
-              <th className="p-3">Status</th>
-              <th className="p-3">Action</th>
-            </tr>
-          </thead>
+                // Button behavior based on permissions + status
+                let label = "Enter Result";
+                let Icon = Play;
+                let disabled = false;
 
-          <tbody>
-            {loading ? (
-              <tr><td colSpan="6" className="p-4 text-center">Loading...</td></tr>
-            ) : worklist.length === 0 ? (
-              <tr><td colSpan="6" className="p-4 text-center">No records found</td></tr>
-            ) : (
-              worklist.map((item) => {
-                const status = item.item_status || item.test_status;
-                const isForEntry = ["samplecollected", "pending", "inprogress", "reopened"].includes(
-                  status?.toLowerCase().replace(/\s/g, "")
-                );
-                const isForReview = ["completed", "underreview"].includes(
-                  status?.toLowerCase().replace(/\s/g, "")
-                );
+                if (canOnlyView) {
+                  label = "View";
+                  Icon = Eye;
+                  disabled = false; // can still navigate, just not perform sensitive actions
+                } else if (isReviewState && canVerify) {
+                  label = "Review";
+                  Icon = Eye;
+                } else if (isReviewState && !canVerify && canEnter) {
+                  // Can enter but cannot verify → treat as read-only on completed stuff
+                  label = "View";
+                  Icon = Eye;
+                } else if (!isReviewState && canEnter) {
+                  label = "Enter Result";
+                  Icon = Play;
+                } else {
+                  label = "View";
+                  Icon = Eye;
+                }
 
-                return (
-                  <tr key={item.test_item_id} className="border-b hover:bg-gray-50">
-                    <td className="p-3">{new Date(item.date_ordered).toLocaleString()}</td>
-                    <td className="p-3">{item.patient_name}</td>
-                    <td className="p-3">{item.test_name}</td>
-                    <td className="p-3">{item.department_name || "-"}</td>
-                    <td className="p-3">
-                      <span className={`px-2 py-1 rounded-full text-xs ${getStatusClass(status)}`}>
-                        {status}
-                      </span>
-                    </td>
-                    <td className="p-3">
-                      {isForEntry ? (
-                        <button onClick={() => handleAnalyze(item.request_id)} className="text-blue-600 hover:underline flex items-center gap-1">
-                          <Play className="w-4 h-4" /> Enter Result
-                        </button>
-                      ) : isForReview ? (
-                        status === "Completed" ? (
-                          <button onClick={() => handleMarkForReview(item.test_item_id, item.request_id)} className="text-cyan-700 hover:underline flex items-center gap-1">
-                            <Eye className="w-4 h-4" /> Review
-                          </button>
-                        ) : (
-                          <button onClick={() => handleReviewNavigation(item.request_id)} className="text-cyan-700 hover:underline flex items-center gap-1">
-                            <Eye className="w-4 h-4" /> Continue Review
-                          </button>
-                        )
-                      ) : (
-                        <span className="text-gray-500">{status}</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-
-        </table>
-      </div>
-
-    </div>
-  );
+                return (
+                  <tr
+                    key={`${row.request_id}-${row.test_item_id}`}
+                    className="hover:bg-gray-50 transition-colors"
+                  >
+                    <td className="px-6 py-4 font-medium text-gray-900">
+                      {row.patient_name}
+                    </td>
+                    <td className="px-6 py-4 font-mono text-xs text-gray-600">
+                      {row.lab_id}
+                    </td>
+                    <td className="px-6 py-4 text-gray-700">
+                      {row.test_name}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={cn(
+                          "px-2.5 py-0.5 rounded-full text-xs font-medium border",
+                          statusBadgeClass
+                        )}
+                      >
+                        {row.item_status || row.test_status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <button
+                        onClick={() => handleNavigation(row)}
+                        disabled={disabled}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium shadow-sm transition-colors",
+                          disabled
+                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                            : isReviewState
+                            ? "bg-white border border-gray-300 text-gray-700 hover:bg-gray-50"
+                            : "bg-blue-600 text-white hover:bg-blue-700"
+                        )}
+                      >
+                        <Icon size={14} />
+                        {label}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 };
 
 export default PathologistWorklistPage;

@@ -5,8 +5,9 @@ const pool = require('../config/database');
 // @access  Private
 const getWards = async (req, res) => {
   try {
+    // 🚀 UPDATE: Include 'type' in the select query
     const result = await pool.query(
-      'SELECT id, name, created_at FROM wards ORDER BY name ASC'
+      'SELECT id, name, type, created_at FROM wards ORDER BY name ASC'
     );
     res.status(200).json(result.rows);
   } catch (error) {
@@ -19,7 +20,8 @@ const getWards = async (req, res) => {
 // @route   POST /api/wards
 // @access  Private (Admin only)
 const createWard = async (req, res) => {
-  const { name } = req.body;
+  // 🚀 UPDATE: Accept 'type' from request body
+  const { name, type } = req.body;
 
   if (!name || !name.trim()) {
     return res.status(400).json({ message: 'Ward name is required.' });
@@ -32,9 +34,10 @@ const createWard = async (req, res) => {
       return res.status(400).json({ message: 'Ward already exists.' });
     }
 
+    // 🚀 UPDATE: Insert 'type' into database (default to 'General' if missing)
     const newWard = await pool.query(
-      'INSERT INTO wards (name, created_at) VALUES ($1, NOW()) RETURNING *',
-      [name]
+      'INSERT INTO wards (name, type, created_at) VALUES ($1, $2, NOW()) RETURNING *',
+      [name, type || 'General']
     );
     res.status(201).json(newWard.rows[0]);
   } catch (error) {
@@ -48,16 +51,18 @@ const createWard = async (req, res) => {
 // @access  Private (Admin only)
 const updateWard = async (req, res) => {
   const { id } = req.params;
-  const { name } = req.body;
+  // 🚀 UPDATE: Accept 'type' from request body
+  const { name, type } = req.body;
 
   if (!name || !name.trim()) {
     return res.status(400).json({ message: 'Ward name is required.' });
   }
 
   try {
+    // 🚀 UPDATE: Update 'type' column as well
     const updated = await pool.query(
-      'UPDATE wards SET name = $1 WHERE id = $2 RETURNING *',
-      [name, id]
+      'UPDATE wards SET name = $1, type = $2 WHERE id = $3 RETURNING *',
+      [name, type || 'General', id]
     );
 
     if (updated.rows.length === 0) {

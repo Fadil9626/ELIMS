@@ -1,5 +1,5 @@
 // frontend/src/components/layout/Sidebar.jsx
-import React, { useState } from "react";
+import React, { useState, useContext, useMemo } from "react";
 import { NavLink } from "react-router-dom";
 import {
   HiMenu,
@@ -9,49 +9,91 @@ import {
   HiOutlineArchive,
   HiOutlineClipboardList,
   HiOutlineCog,
-  HiOutlineBriefcase,
   HiOutlineDocumentReport,
   HiOutlineClipboardCheck,
-  HiOutlineCollection,
-  HiOutlineDatabase,
   HiChevronDown,
   HiChevronRight,
   HiX,
 } from "react-icons/hi";
-import { RiLogoutBoxLine } from "react-icons/ri";
 import { HiPaperAirplane } from "react-icons/hi2";
+import { RiLogoutBoxLine } from "react-icons/ri";
 import { useAuth } from "../../context/AuthContext";
+import { SettingsContext } from "../../context/SettingsContext";
 
-const SidebarLink = ({ to, icon: Icon, children, isExpanded, onClick }) => (
+/* ============================================================
+    Reusable Sidebar Link
+============================================================ */
+const SidebarLink = ({
+  to,
+  icon: Icon,
+  children,
+  isExpanded,
+  onClick,
+  end,
+}) => (
   <li onClick={onClick}>
     <NavLink
       to={to}
+      end={end}
       className={({ isActive }) =>
-        `flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 
-         ${isExpanded ? "justify-start" : "justify-center"} 
-         ${
-           isActive
-             ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-sm"
-             : "text-gray-300 hover:bg-gray-700 hover:text-white"
-         }`
+        `
+        flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 
+        ${isExpanded ? "justify-start" : "justify-center"}
+        ${
+          isActive
+            ? "bg-blue-600 text-white shadow-md"
+            : "text-gray-300 hover:bg-gray-700 hover:text-white"
+        }
+      `
       }
     >
       <Icon className="w-5 h-5 shrink-0" />
-      {isExpanded && <span className="text-sm font-medium">{children}</span>}
+      {isExpanded && (
+        <span className="text-sm font-medium truncate">{children}</span>
+      )}
     </NavLink>
   </li>
 );
 
+/* ============================================================
+    MAIN SIDEBAR
+============================================================ */
 const Sidebar = ({ isExpanded, toggleSidebar }) => {
-  const { user, logout, can } = useAuth();
+  const { logout, can } = useAuth();
+  const { settings } = useContext(SettingsContext);
 
   const [patientOpen, setPatientOpen] = useState(false);
   const [pathologyOpen, setPathologyOpen] = useState(false);
-  const [systemOpen, setSystemOpen] = useState(false);
-  const [labOpen, setLabOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const sidebarWidth = isExpanded ? "w-64" : "w-20";
+  const theme = settings?.theme_mode || "dark";
+
+  const sidebarTitle = useMemo(
+    () => settings?.system_sidebar_title || settings?.lab_name || "ELIMS",
+    [settings]
+  );
+
+  /* ----------------- Role Logic ------------------ */
+  const isReception =
+    can("patients", "view") ||
+    can("patients", "register") ||
+    can("billing", "create");
+
+  const isPhleb = can("phlebotomy", "view");
+  const isPathologist = can("pathologist", "view");
+  const isResultEntry = can("results", "enter");
+  const isReports = can("reports", "view");
+  const isSettings = can("settings", "view");
+  const isPatients = can("patients", "view");
+
+  const showMessages =
+    can("messages", "view") ||
+    can("messages", "send") ||
+    can("messages", "manage");
+
+  // 🧠 Dashboard is always /dashboard; role redirect happens in DashboardPage
+  const dashboardRoute = "/dashboard";
 
   const handleNavClick = () => {
     if (window.innerWidth < 768) setMobileOpen(false);
@@ -59,7 +101,7 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
 
   return (
     <>
-      {/* Mobile Toggle */}
+      {/* MOBILE BUTTON */}
       <button
         onClick={() => setMobileOpen(true)}
         className="md:hidden fixed top-4 left-4 z-40 bg-blue-600 text-white p-2 rounded-md shadow-md hover:bg-blue-700 transition"
@@ -74,33 +116,55 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
         />
       )}
 
+      {/* SIDEBAR PANEL */}
       <aside
-        className={`fixed inset-y-0 left-0 flex flex-col bg-gray-900 text-gray-100 shadow-2xl ${sidebarWidth}
-         transition-all duration-300 ease-in-out z-40
-         ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
+        className={`fixed inset-y-0 left-0 flex flex-col shadow-xl z-40 transition-all duration-300
+          ${sidebarWidth}
+          ${
+            theme === "light"
+              ? "bg-white text-gray-900"
+              : "bg-gray-900 text-gray-100"
+          }
+          ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
+        `}
       >
-        {/* Header */}
+        {/* HEADER */}
         <div
-          className={`flex items-center border-b border-gray-700 px-3 py-4 bg-gradient-to-r from-blue-700 to-blue-800 ${
-            isExpanded ? "justify-between" : "justify-center"
-          }`}
+          className={`flex items-center gap-3 px-4 py-4 border-b ${
+            theme === "light"
+              ? "border-gray-200 bg-gray-50"
+              : "border-gray-700 bg-gray-800"
+          } ${isExpanded ? "justify-between" : "justify-center"}`}
         >
-          {isExpanded && <h1 className="text-xl font-bold">ELIMS</h1>}
+          {isExpanded ? (
+            <h1 className="font-semibold text-sm truncate max-w-[9rem]">
+              {sidebarTitle}
+            </h1>
+          ) : (
+            <span className="text-lg font-bold">
+              {sidebarTitle.charAt(0)}
+            </span>
+          )}
+
           <button
             onClick={mobileOpen ? () => setMobileOpen(false) : toggleSidebar}
-            className="p-2 rounded hover:bg-blue-600 transition"
+            className="p-2 rounded hover:bg-blue-600/60 transition"
           >
-            {mobileOpen ? <HiX className="w-5 h-5" /> : <HiMenu className="w-5 h-5" />}
+            {mobileOpen ? (
+              <HiX className="w-5 h-5" />
+            ) : (
+              <HiMenu className="w-5 h-5" />
+            )}
           </button>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-grow overflow-y-auto p-3 space-y-1 custom-scrollbar">
+        {/* NAVIGATION */}
+        <nav className="flex-grow overflow-y-auto p-3 custom-scrollbar">
           <ul className="space-y-1">
-
-            {/* Dashboard */}
+            {/* DASHBOARD (always /dashboard) */}
             <SidebarLink
-              to="/admin/dashboard"
+              to={dashboardRoute}
+              end
               icon={HiOutlineViewGrid}
               isExpanded={isExpanded}
               onClick={handleNavClick}
@@ -108,40 +172,62 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
               Dashboard
             </SidebarLink>
 
-            {/* 📩 Messaging */}
-            <SidebarLink
-              to="/messages"
-              icon={HiPaperAirplane}
-              isExpanded={isExpanded}
-              onClick={handleNavClick}
-            >
-              Messages
-            </SidebarLink>
+            {/* MESSAGES */}
+            {showMessages && (
+              <SidebarLink
+                to="/messages"
+                icon={HiPaperAirplane}
+                isExpanded={isExpanded}
+                onClick={handleNavClick}
+              >
+                Messages
+              </SidebarLink>
+            )}
 
-            {/* Patients */}
-            {can("Patients", "View") && (
+            {/* PATIENT MANAGEMENT (Reception Only) */}
+            {isPatients && isReception && (
               <li>
                 <button
-                  onClick={() => setPatientOpen((p) => !p)}
-                  className="flex items-center w-full px-3 py-2.5 rounded-lg hover:bg-gray-700 transition"
+                  onClick={() => setPatientOpen((prev) => !prev)}
+                  className={`flex items-center w-full px-3 py-2.5 rounded-lg hover:bg-gray-700 transition
+                  ${isExpanded ? "justify-start" : "justify-center"}`}
                 >
-                  <HiOutlineUsers className="w-5 h-5 shrink-0" />
-                  {isExpanded && <span className="ml-3">Patients</span>}
-                  {isExpanded && (patientOpen ? <HiChevronDown /> : <HiChevronRight />)}
+                  <HiOutlineUsers className="w-5 h-5" />
+                  {isExpanded && (
+                    <span className="ml-3 text-sm">Patients</span>
+                  )}
+                  {isExpanded && (
+                    <span className="ml-auto">
+                      {patientOpen ? <HiChevronDown /> : <HiChevronRight />}
+                    </span>
+                  )}
                 </button>
 
                 {patientOpen && isExpanded && (
-                  <ul className="ml-8 mt-1 space-y-1">
-                    <SidebarLink to="/patients" icon={HiOutlineUsers} isExpanded onClick={handleNavClick}>
-                      Patient List
+                  <ul className="ml-8 space-y-1 mt-1">
+                    <SidebarLink
+                      to="/patients"
+                      icon={HiOutlineUsers}
+                      isExpanded={true}
+                      onClick={handleNavClick}
+                    >
+                      Patient Directory
+                    </SidebarLink>
+                    <SidebarLink
+                      to="/patients/register"
+                      icon={HiOutlineUsers}
+                      isExpanded={true}
+                      onClick={handleNavClick}
+                    >
+                      Register Patient
                     </SidebarLink>
                   </ul>
                 )}
               </li>
             )}
 
-            {/* Phlebotomy */}
-            {can("Phlebotomy", "View") && (
+            {/* PHLEBOTOMY */}
+            {isPhleb && (
               <SidebarLink
                 to="/phlebotomy/worklist"
                 icon={HiOutlineClipboardCheck}
@@ -152,107 +238,86 @@ const Sidebar = ({ isExpanded, toggleSidebar }) => {
               </SidebarLink>
             )}
 
-            {/* Pathology */}
-            {(can("Results", "Verify") || can("Results", "Enter")) && (
+            {/* PATHOLOGY */}
+            {(isPathologist || isResultEntry) && (
               <li>
                 <button
-                  onClick={() => setPathologyOpen((p) => !p)}
-                  className="flex items-center w-full px-3 py-2.5 rounded-lg hover:bg-gray-700 transition"
+                  onClick={() => setPathologyOpen((prev) => !prev)}
+                  className={`flex items-center w-full px-3 py-2.5 rounded-lg hover:bg-gray-700 transition
+                  ${isExpanded ? "justify-start" : "justify-center"}`}
                 >
-                  <HiOutlineClipboardList className="w-5 h-5 shrink-0" />
-                  {isExpanded && <span className="ml-3">Pathology</span>}
-                  {isExpanded && (pathologyOpen ? <HiChevronDown /> : <HiChevronRight />)}
+                  <HiOutlineBeaker className="w-5 h-5" />
+                  {isExpanded && (
+                    <span className="ml-3 text-sm">Pathology</span>
+                  )}
+                  {isExpanded && (
+                    <span className="ml-auto">
+                      {pathologyOpen ? <HiChevronDown /> : <HiChevronRight />}
+                    </span>
+                  )}
                 </button>
 
-                {pathologyOpen && (
-                  <ul className="ml-8 mt-1 space-y-1">
-                    <SidebarLink to="/pathologist/worklist" icon={HiOutlineClipboardList} isExpanded onClick={handleNavClick}>
-                      Worklist
-                    </SidebarLink>
-                    <SidebarLink to="/pathologist/results" icon={HiOutlineClipboardCheck} isExpanded onClick={handleNavClick}>
-                      Result Entry
-                    </SidebarLink>
+                {pathologyOpen && isExpanded && (
+                  <ul className="ml-8 space-y-1 mt-1">
+                    {isPathologist && (
+                      <SidebarLink
+                        to="/pathologist/worklist"
+                        icon={HiOutlineClipboardList}
+                        isExpanded={true}
+                        onClick={handleNavClick}
+                      >
+                        Worklist
+                      </SidebarLink>
+                    )}
+                    {isResultEntry && (
+                      <SidebarLink
+                        to="/pathologist/results"
+                        icon={HiOutlineArchive}
+                        isExpanded={true}
+                        onClick={handleNavClick}
+                      >
+                        Result Entry
+                      </SidebarLink>
+                    )}
                   </ul>
                 )}
               </li>
             )}
 
-            {/* Reports */}
-            {can("Reports", "View") && (
-              <SidebarLink to="/reports" icon={HiOutlineDocumentReport} isExpanded={isExpanded} onClick={handleNavClick}>
+            {/* REPORTS */}
+            {isReports && (
+              <SidebarLink
+                to="/reports"
+                icon={HiOutlineDocumentReport}
+                isExpanded={isExpanded}
+                onClick={handleNavClick}
+              >
                 Reports
               </SidebarLink>
             )}
 
-            {/* Inventory */}
-            {can("Inventory", "View") && (
-              <SidebarLink to="/inventory" icon={HiOutlineArchive} isExpanded={isExpanded} onClick={handleNavClick}>
-                Inventory
+            {/* SETTINGS */}
+            {isSettings && (
+              <SidebarLink
+                to="/admin/settings"
+                icon={HiOutlineCog}
+                isExpanded={isExpanded}
+                onClick={handleNavClick}
+              >
+                System Settings
               </SidebarLink>
-            )}
-
-            {/* Staff */}
-            {can("Users", "View") && (
-              <SidebarLink to="/admin/staff" icon={HiOutlineBriefcase} isExpanded={isExpanded} onClick={handleNavClick}>
-                Staff Management
-              </SidebarLink>
-            )}
-
-            {/* System Settings */}
-            {can("Settings", "View") && (
-              <li>
-                <button
-                  onClick={() => setSystemOpen((p) => !p)}
-                  className="flex items-center w-full px-3 py-2.5 rounded-lg hover:bg-gray-700 transition"
-                >
-                  <HiOutlineCog className="w-5 h-5 shrink-0" />
-                  {isExpanded && <span className="ml-3">System Settings</span>}
-                  {isExpanded && (systemOpen ? <HiChevronDown /> : <HiChevronRight />)}
-                </button>
-
-                {systemOpen && (
-                  <ul className="ml-8 mt-1 space-y-1">
-                    <SidebarLink to="/admin/settings" icon={HiOutlineCog} isExpanded onClick={handleNavClick}>
-                      General Settings
-                    </SidebarLink>
-
-                    <li>
-                      <button
-                        onClick={() => setLabOpen((p) => !p)}
-                        className="flex items-center w-full px-3 py-2 text-gray-300 hover:bg-gray-700 rounded-lg transition"
-                      >
-                        <HiOutlineCollection className="w-5 h-5" />
-                        {isExpanded && <span className="ml-3">Lab Configuration</span>}
-                        {isExpanded && (labOpen ? <HiChevronDown /> : <HiChevronRight />)}
-                      </button>
-
-                      {labOpen && (
-                        <ul className="ml-8 mt-1 space-y-1">
-                          <SidebarLink to="/admin/lab-config/catalog" icon={HiOutlineDatabase} isExpanded onClick={handleNavClick}>
-                            Test Catalog
-                          </SidebarLink>
-                          <SidebarLink to="/admin/lab-config" icon={HiOutlineCog} isExpanded onClick={handleNavClick}>
-                            Config Dashboard
-                          </SidebarLink>
-                        </ul>
-                      )}
-                    </li>
-                  </ul>
-                )}
-              </li>
             )}
           </ul>
         </nav>
 
-        {/* Logout */}
+        {/* LOGOUT */}
         <div className="p-4 border-t border-gray-700">
           <button
             onClick={() => logout(true, true)}
-            className={`flex items-center gap-3 px-3 py-2 w-full rounded-lg text-white bg-red-600 hover:bg-red-700 transition duration-200 ${
-              isExpanded ? "justify-start" : "justify-center"
-            }`}
+            className={`flex items-center gap-3 w-full px-3 py-2 rounded-lg text-white bg-red-600 hover:bg-red-700 transition
+            ${isExpanded ? "justify-start" : "justify-center"}`}
           >
-            <RiLogoutBoxLine className="w-5 h-5 shrink-0" />
+            <RiLogoutBoxLine className="w-5 h-5" />
             {isExpanded && <span>Logout</span>}
           </button>
         </div>

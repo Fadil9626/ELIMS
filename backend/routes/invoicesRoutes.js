@@ -1,7 +1,8 @@
-// backend/routes/invoicesRoutes.js
 const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middleware/authMiddleware");
+
+// ✅ FIXED: match the real filename invoicesController.js
 const { getInvoiceForTestRequest } = require("../controllers/invoicesController");
 
 // Ensure :id is numeric (avoids path-to-regexp issues)

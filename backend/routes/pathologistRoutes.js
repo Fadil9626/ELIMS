@@ -2,79 +2,83 @@ const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middleware/authMiddleware");
 
+// ---------------------- Pathology Controller ----------------------
 const {
   getPathologistWorklist,
   getResultTemplate,
   submitResult,
   verifyResult,
-  releaseReport,
   reopenResult,
   markResultForReview,
+  releaseReport,
   getStatusCounts,
   getResultHistory,
   getAnalyzerResults,
-  updateRequestItemStatus, 
+  updateRequestItemStatus,
 } = require("../controllers/pathologistController");
 
-// =============================================================
-// 🧠 PATHOLOGIST ROUTES
-// =============================================================
+// ==============================================================
+// 🔬 PATHOLOGY ROUTES  (/api/pathologist)
+// ==============================================================
 
-// Ensure user is authenticated for all routes in this router
 router.use(protect);
 
-// --- Primary Workload Routes ---
-// -------------------------------------------------------------
-// 🧾 Worklist (View)
-// ✅ **FIX**: Checking the more general "Lab_work" resource
-// -------------------------------------------------------------
-router.get("/worklist", authorize("Lab_work", "View"), getPathologistWorklist);
+// ------------------ VIEW (Matches DB: pathologist/view) ------------------
+router.get("/worklist",
+  authorize("pathologist", "view"),
+  getPathologistWorklist
+);
 
-// -------------------------------------------------------------
-// 📊 Dashboard Status Counts 
-// ✅ **FIX**: Checking the more general "Lab_work" resource
-// -------------------------------------------------------------
-router.get("/status-counts", authorize("Lab_work", "View"), getStatusCounts);
+router.get("/status-counts",
+  authorize("pathologist", "view"),
+  getStatusCounts
+);
 
-// --- Result Entry and Verification ---
-// ... (rest of the routes are unchanged) ...
+router.get("/requests/:requestId/template",
+  authorize("pathologist", "view"),
+  getResultTemplate
+);
 
-// -------------------------------------------------------------
-// 📋 Result Template (READ for entry UI)
-// ✅ **FIX**: Capitalized "Results"
-// -------------------------------------------------------------
-router.get("/result-template/:requestId", authorize("Results", "Enter"), getResultTemplate);
+router.get("/items/:itemId/history",
+  authorize("pathologist", "view"),
+  getResultHistory
+);
 
-// -------------------------------------------------------------
-// ✍️ Result Actions (Targeting a specific test item)
-// -------------------------------------------------------------
-// Submit / Update a Single Result (ENTER)
-// ✅ **FIX**: Capitalized "Results"
-router.put("/result/:itemId", authorize("Results", "Enter"), submitResult);
+router.get("/items/:itemId/analyzer-results",
+  authorize("pathologist", "view"),
+  getAnalyzerResults
+);
 
-// Verify a Single Result (VERIFY)
-// ✅ **FIX**: Capitalized "Results"
-router.post("/verify/:itemId", authorize("Results", "Verify"), verifyResult);
+// ------------------ ENTER (Matches DB: pathologist/enter) ------------------
+router.post("/items/:itemId/submit",
+  authorize("pathologist", "enter"),
+  submitResult
+);
 
-// Reopen a Single Test Item (REOPEN)
-// ✅ **FIX**: Capitalized "Results"
-router.post("/reopen/:itemId", authorize("Results", "Update"), reopenResult);
+router.post("/items/:itemId/review",
+  authorize("pathologist", "enter"),
+  markResultForReview
+);
 
-// Mark a Result as Under Review (REVIEW)
-// ✅ **FIX**: Capitalized "Results"
-router.patch("/review/:itemId", authorize("Results", "Verify"), markResultForReview);
+router.patch("/items/:itemId/status",
+  authorize("pathologist", "enter"),
+  updateRequestItemStatus
+);
 
-// 🟢 NEW ROUTE: Update Item Status (Used by front-end to mark panels as 'Completed')
-// ✅ **FIX**: Capitalized "Results"
-router.put("/item-status/:itemId", authorize("Results", "Enter"), updateRequestItemStatus);
+// ------------------ VERIFY (Matches DB: pathology/verify) ------------------
+router.post("/items/:itemId/verify",
+  authorize("pathology", "verify"),
+  verifyResult
+);
 
-// -------------------------------------------------------------
-// 🚀 Report Release (Targeting the entire request by :requestId)
-// -------------------------------------------------------------
-// ✅ **FIX**: Capitalized "Results"
-router.post("/release/:requestId", authorize("Results", "Manage"), releaseReport); 
+router.post("/items/:itemId/reopen",
+  authorize("pathology", "verify"),
+  reopenResult
+);
 
-// --- Audit and Integrations ---
-// ... (rest of the routes are unchanged) ...
+router.post("/requests/:requestId/release",
+  authorize("pathology", "verify"),
+  releaseReport
+);
 
 module.exports = router;

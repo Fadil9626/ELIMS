@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import apiFetch from "../../services/apiFetch"; // <-- 1. Import the correct fetch helper
 import { FiTrendingUp, FiUsers, FiClipboard, FiDollarSign } from "react-icons/fi";
 import { MdPendingActions, MdPeopleAlt } from "react-icons/md";
 
 const AdminDashboardPage = () => {
-  const { authedFetch, user } = useAuth();
+  const { user } = useAuth(); // <-- 2. Removed 'authedFetch' from here
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState("month");
@@ -16,19 +17,13 @@ const AdminDashboardPage = () => {
       // const res = await authedFetch(`/api/dashboard/admin?period=${period}`);
       
       // ✅ NEW, CORRECT URL (matches your server.js)
-      const res = await authedFetch(`/api/billing/dashboard-stats?period=${period}`);
+      // <-- 3. Renamed to 'apiFetch'
+      const data = await apiFetch(`/api/billing/dashboard-stats?period=${period}`);
 
-      const text = await res.text();
-
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        console.error("Invalid JSON response:", text);
-        throw new Error("Backend did not return valid JSON");
-      }
-
+      // 🚀 FIXED: 'apiFetch' already returns the parsed JSON data.
+      // No need to call .text() or JSON.parse().
       setStats(data);
+
     } catch (err) {
       console.error("Dashboard Load Error:", err.message);
     } finally {

@@ -1,70 +1,135 @@
-const pool = require('../config/database');
+const pool = require("../config/database");
 
-// @desc    Get all audit logs with search and filter
-// @route   GET /api/audit-logs
-// @access  Private (Admin)
 const getAuditLogs = async (req, res) => {
-  const { search = '', action = '' } = req.query;
-  let query = '';
-  
   try {
+    const {
+      search = "",
+      action = "",
+      module = "",
+      severity = "",
+      user = "",
+      role = "",
+      from = "",
+      to = "",
+      page = 1,
+      limit = 20,
+    } = req.query;
+
     const params = [];
-    const whereClauses = [];
     let idx = 1;
+    const where = [];
+    const trimmed = (v) => String(v || "").trim();
 
-    const trimmedSearch = search.trim();
-
-    // Base SELECT
-    const queryParts = [`
-      SELECT
-        a.id,
-        a.action,
-        a.details,
-        a.created_at,
-        COALESCE(u.full_name, a.details->>'email', a.details->>'username', 'System/Guest') AS user_name
-      FROM
-        audit_logs a
-      LEFT JOIN
-        users u ON a.user_id = u.id
-    `];
-
-    // Action filter
-    if (action) {
-      whereClauses.push(`a.action = $${idx++}`);
-      params.push(action);
-    }
-
-    // Search filter (only if actual content exists)
-    if (trimmedSearch) {
-      const pattern = `%${trimmedSearch}%`;
-      whereClauses.push(`(
-        COALESCE(u.full_name, a.details->>'email', a.details->>'username', '') ILIKE $${idx}
-        OR a.action ILIKE $${idx}
-        OR a.details::text ILIKE $${idx}
+    // Global search
+    if (trimmed(search)) {
+      where.push(`(
+        a.username ILIKE $${idx} OR
+        a.action ILIKE $${idx} OR
+        a.module ILIKE $${idx} OR
+        a.severity ILIKE $${idx} OR
+        a.details::text ILIKE $${idx}
       )`);
-      params.push(pattern);
+      params.push(`%${trimmed(search)}%`);
       idx++;
     }
 
-    // Combine WHERE if needed
-    if (whereClauses.length > 0) {
-      queryParts.push('WHERE ' + whereClauses.join(' AND '));
+    // Filters
+    if (trimmed(action)) {
+      where.push(`a.action = $${idx}`);
+      params.push(trimmed(action).toUpperCase());
+      idx++;
     }
 
-    // Sort order
-    queryParts.push('ORDER BY a.created_at DESC;');
+    if (trimmed(module)) {
+      where.push(`a.module = $${idx}`);
+      params.push(trimmed(module).toUpperCase());
+      idx++;
+    }
 
-    // ✅ Safely join everything
-    query = queryParts.join(' ').replace(/\s+/g, ' ').trim();
+    if (trimmed(severity)) {
+      where.push(`a.severity = $${idx}`);
+      params.push(trimmed(severity).toUpperCase());
+      idx++;
+    }
 
-    const result = await pool.query(query, params);
-    res.status(200).json(result.rows);
-  } catch (err) {
-    console.error('Error fetching audit logs. Failed Query:', query);
-    console.error('Error fetching audit logs:', err.message);
+    if (trimmed(user)) {
+      where.push(`a.username ILIKE $${idx}`);
+      params.push(`%${trimmed(user)}%`);
+      idx++;
+    }
+
+    if (trimmed(role)) {
+      where.push(`a.role ILIKE $${idx}`);
+      params.push(`%${trimmed(role)}%`);
+      idx++;
+    }
+
+    // Date range
+    if (from) {
+      where.push(`a.created_at >= $${idx}`);
+      params.push(from);
+      idx++;
+    }
+
+    if (to) {
+      where.push(`a.created_at <= $${idx}::timestamp`);
+      params.push(to + " 23:59:59");
+      idx++;
+    }
+
+    const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    const limitNum = Number(limit);
+    const pageNum = Number(page);
+    const offset = (pageNum - 1) * limitNum;
+
+    // Total count
+    const totalQuery = `
+      SELECT COUNT(*) AS total
+      FROM audit_logs a
+      ${whereSQL}
+    `;
+    const totalRes = await pool.query(totalQuery, params);
+    const total = Number(totalRes.rows[0].total);
+
+    // Fetch logs
+    const logsQuery = `
+      SELECT
+        a.id,
+        a.user_id,
+        a.username,
+        a.role,
+        a.module,
+        a.action,
+        a.severity,
+        a.details,
+        a.ip_address,
+        a.user_agent,
+        a.entity,
+        a.entity_id,
+        a.entity_type,
+        a.created_at
+      FROM audit_logs a
+      ${whereSQL}
+      ORDER BY a.created_at DESC
+      LIMIT ${limitNum} OFFSET ${offset};
+    `;
+
+    const logsRes = await pool.query(logsQuery, params);
+
+    res.json({
+      success: true,
+      logs: logsRes.rows,
+      total,
+      page: pageNum,
+      limit: limitNum,
+    });
+
+  } catch (error) {
+    console.error("❌ Audit Log Error:", error.message);
     res.status(500).json({
       success: false,
-      message: 'Server Error processing request. Details logged.',
+      message: "Failed to load audit logs",
     });
   }
 };

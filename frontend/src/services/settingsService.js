@@ -1,145 +1,151 @@
-// =============================================================
-// 📦 API CONFIG
-// =============================================================
-const API_URL = "/api/settings";
-
-// =============================================================
-// ⚙️ API HELPER
-// =============================================================
-const apiFetch = async (
-  url,
-  token,
-  options = {}
-) => {
-  // For FormData (file uploads), we must NOT set Content-Type
-  // The browser will set it automatically with the correct boundary
-  const isFormData = options.body instanceof FormData;
-
-  const headers = {
-    Authorization: `Bearer ${token}`,
-  };
-
-  if (!isFormData && options.body) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  const res = await fetch(url, { ...options, headers });
-  const text = await res.text();
-
-  if (!res.ok) {
-    let message;
-    try {
-      const parsed = JSON.parse(text);
-      message = parsed.message || parsed.error || text;
-    } catch {
-      message = text;
-    }
-    const error = new Error(`❌ API Error: ${message || res.statusText} (${res.status}) at ${url}`);
-    error.status = res.status;
-    error.url = url;
-    throw error;
-  }
-
-  try {
-    return text ? JSON.parse(text) : ({});
-  } catch {
-    return text;
-  }
-};
-
-// =============================================================
-// 🏠 Lab Profile Functions
-// =============================================================
-
 /**
- * @desc 🟢 NEW: Fetches general app settings (like maintenance_mode)
- * (Corresponds to getAllSettings in the controller)
+ * SETTINGS SERVICE (FINAL + PATCHED)
+ * Auto-handles token + headers because apiFetch already inserts them.
  */
-export const getSettings = async (token) => {
-  return apiFetch(
-    `${API_URL}/`, // Calls GET /api/settings
-    token,
-    { method: "GET" }
-  );
+
+import apiFetch from "../services/apiFetch";
+
+const BASE = "/api/settings";
+
+/* ------------------------------------------------------------
+   GENERAL SYSTEM SETTINGS
+------------------------------------------------------------ */
+export const getSettings = () => apiFetch(`${BASE}`);
+
+export const updateSettingsValues = (values) =>
+  apiFetch(`${BASE}`, {
+    method: "PUT",
+    body: JSON.stringify(values),
+  });
+
+/* ------------------------------------------------------------
+   LAB PROFILE (logos, address, invoice header)
+------------------------------------------------------------ */
+export const getLabProfile = async () => {
+  const data = await apiFetch(`${BASE}/lab-profile`);
+
+  // 🔥 FIX: Normalize backend keys
+  return {
+    lab_name: data.lab_name || "",
+    lab_address: data.lab_address || "",
+    lab_phone: data.lab_phone || "",
+    lab_email: data.lab_email || "",
+    lab_logo_light: data.logo_light || "", // FIXED MAPPING
+    lab_logo_dark: data.logo_dark || "",   // FIXED MAPPING
+  };
 };
 
-/**
- * @desc Fetches lab profile settings (name, address, logos)
- */
-export const getLabProfile = async (token) => {
-  return apiFetch(
-    `${API_URL}/lab-profile`,
-    token,
-    { method: "GET" }
-  );
+export const updateLabProfile = (payload) =>
+  apiFetch(`${BASE}/lab-profile`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const uploadLabLogoLight = (file) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiFetch(`${BASE}/lab-profile/logo/light`, {
+    method: "POST",
+    body: fd,
+  });
 };
 
-/**
- * @desc Updates lab profile text settings
- * (Corresponds to updateLabProfile in the controller)
- */
-export const updateSettings = async (settingsData, token) => {
-  // NOTE: This service function is currently set to update the LAB PROFILE.
-  // The error in SettingsContext.jsx might be because it's calling this
-  // function expecting it to update GENERAL settings (PUT /api/settings/).
-  // For now, we leave it, as getSettings was the primary error.
-  return apiFetch(
-    `${API_URL}/lab-profile`, 
-    token, 
-    {
-      method: "PUT",
-      body: JSON.stringify(settingsData),
-    }
-  );
+export const uploadLabLogoDark = (file) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiFetch(`${BASE}/lab-profile/logo/dark`, {
+    method: "POST",
+    body: fd,
+  });
 };
 
-// =============================================================
-// 🖼️ Logo Upload Functions
-// =============================================================
+/* ------------------------------------------------------------
+   LOGIN SCREEN BRANDING
+------------------------------------------------------------ */
+export const getLoginBranding = () => apiFetch(`${BASE}/branding/login`);
 
-/**
- * Uploads the light theme logo
- */
-export const uploadLabLogoLight = async (file, token) => {
-  const formData = new FormData();
-  formData.append("file", file);
+export const updateLoginBranding = (data) =>
+  apiFetch(`${BASE}/branding/login`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 
-  return apiFetch(
-    `${API_URL}/lab-profile/logo/light`, 
-    token, 
-    {
-      method: "POST",
-      body: formData,
-    }
-  );
+export const uploadLoginBrandingLogo = (file) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiFetch(`${BASE}/branding/login/logo`, {
+    method: "POST",
+    body: fd,
+  });
 };
 
-/**
- * Uploads the dark theme logo
- */
-export const uploadLabLogoDark = async (file, token) => {
- const formData = new FormData();
-  formData.append("file", file);
+/* ------------------------------------------------------------
+   SIDEBAR BRANDING
+------------------------------------------------------------ */
+export const updateSidebarBranding = (data) =>
+  apiFetch(`${BASE}/branding/sidebar`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 
-  return apiFetch(
-    `${API_URL}/lab-profile/logo/dark`, 
-    token, 
-    {
-      method: "POST",
-      body: formData,
-Boolean    }
-  );
+export const uploadSidebarBrandingLogo = (file) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiFetch(`${BASE}/branding/sidebar/logo`, {
+    method: "POST",
+    body: fd,
+  });
 };
 
-// =============================================================
-// 🧠 Export Default
-// =============================================================
+/* ------------------------------------------------------------
+   LEGAL (Reports + Invoices)
+------------------------------------------------------------ */
+export const saveLegalBranding = (data) =>
+  apiFetch(`${BASE}/branding/legal`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+
+export const uploadLegalBrandingLogo = (file) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiFetch(`${BASE}/branding/legal/logo`, {
+    method: "POST",
+    body: fd,
+  });
+};
+
+export const uploadLegalBrandingSignature = (file) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiFetch(`${BASE}/branding/legal/signature`, {
+    method: "POST",
+    body: fd,
+  });
+};
+
+/* ------------------------------------------------------------
+   EXPORT ALL
+------------------------------------------------------------ */
 const settingsService = {
-  getSettings, // 🟢 ADDED THIS
-  getLabProfile,
-  updateSettings,
-  uploadLabLogoLight,
-  uploadLabLogoDark,
+  getSettings,
+  updateSettingsValues,
+
+  getLabProfile,
+  updateLabProfile,
+  uploadLabLogoLight,
+  uploadLabLogoDark,
+
+  getLoginBranding,
+  updateLoginBranding,
+  uploadLoginBrandingLogo,
+
+  updateSidebarBranding,
+  uploadSidebarBrandingLogo,
+
+  saveLegalBranding,
+  uploadLegalBrandingLogo,
+  uploadLegalBrandingSignature,
 };
 
 export default settingsService;

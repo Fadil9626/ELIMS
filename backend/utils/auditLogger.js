@@ -1,22 +1,61 @@
-const pool = require('../config/database');
+const pool = require("../config/database");
 
-/**
- * Logs an event to the audit_logs table.
- * @param {Object} options
- * @param {number|null} options.user_id - ID of the user (null for guests/system)
- * @param {string} options.action - Action performed (e.g., "LOGIN_SUCCESS", "CREATE_PATIENT")
- * @param {Object} options.details - Additional metadata about the action
- */
-const logAuditEvent = async ({ user_id = null, action, details = {} }) => {
+// Core audit writer — never throws
+const auditCore = async (req = {}, event = {}) => {
   try {
+    const {
+      action,
+      module = null,
+      severity = "INFO",
+      role = null,
+      details = {},
+    } = event;
+
+    if (!action) return;
+
+    const src = req.user || req.auditUser || {};
+
+    const userId = src.id || null;
+    const username = src.full_name || src.email || "System";
+    const userRole = src.role_slug || src.role || role || null;
+
+    // Safe IP handling
+    let ipHeader = req.headers?.["x-forwarded-for"];
+    let ip = null;
+
+    if (typeof ipHeader === "string") {
+      ip = ipHeader.split(",")[0].trim();
+    } else {
+      ip = req.socket?.remoteAddress || null;
+    }
+
+    const ua = req.headers?.["user-agent"] || null;
+
     await pool.query(
-      `INSERT INTO audit_logs (user_id, action, details)
-       VALUES ($1, $2, $3)`,
-      [user_id, action, details]
+      `
+      INSERT INTO audit_logs
+        (user_id, username, role, module, action, severity, details, ip_address, user_agent)
+      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)
+      `,
+      [
+        userId,
+        username,
+        userRole,
+        module,
+        action,
+        severity,
+        JSON.stringify(details),
+        ip,
+        ua,
+      ]
     );
-  } catch (error) {
-    console.error('⚠️ Failed to write audit log:', error.message);
+  } catch (err) {
+    console.error("⚠️ Audit log failed silently:", err.message);
   }
 };
 
-module.exports = { logAuditEvent };
+// export both for backwards compatibility
+module.exports = {
+  logEvent: auditCore,
+  logAuditEvent: auditCore,
+};

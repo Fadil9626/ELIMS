@@ -1,11 +1,53 @@
+// frontend/src/services/testRequestService.js
 const API_URL = "/api/test-requests";
 
 /**
- * 🌐 Robust API fetch wrapper with clear error handling
+ * 🧩 Helper: get token from localStorage (same pattern as other pages)
  */
-async function apiFetch(url, options = {}) {
+const getStoredToken = () => {
   try {
-    const res = await fetch(url, options); // ✅ fixed: no double commas
+    const raw = localStorage.getItem("elims_auth_v1");
+    if (!raw) return "";
+    const parsed = JSON.parse(raw);
+    return (
+      parsed?.token ||
+      parsed?.accessToken ||
+      parsed?.access_token ||
+      ""
+    );
+  } catch (e) {
+    console.error("Failed to parse elims_auth_v1:", e);
+    return "";
+  }
+};
+
+/**
+ * 🌐 Robust API fetch wrapper with clear error handling
+ *    - Can use token passed in OR fall back to localStorage
+ */
+async function apiFetch(url, options = {}, tokenArg) {
+  // Prefer explicit token if provided, else from localStorage
+  const authToken = tokenArg || getStoredToken();
+
+  const baseHeaders = {
+    ...(options.headers || {}),
+  };
+
+  if (!baseHeaders["Content-Type"] && options.body) {
+    baseHeaders["Content-Type"] = "application/json";
+  }
+
+  if (authToken && !baseHeaders["Authorization"]) {
+    baseHeaders["Authorization"] = `Bearer ${authToken}`;
+  }
+
+  const config = {
+    ...options,
+    headers: baseHeaders,
+  };
+
+  try {
+    const res = await fetch(url, config);
 
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
@@ -22,10 +64,23 @@ async function apiFetch(url, options = {}) {
     if (res.status === 204) return null;
     return await res.json();
   } catch (err) {
-    console.error("❌ API Error:", err.message); // ✅ fixed: proper syntax
+    console.error("❌ API Error:", err.message);
     throw new Error(err.message || "Network error");
   }
 }
+
+/* -----------------------------------------------------------
+ * Priority normalizer for API
+ * --------------------------------------------------------- */
+const normalizePriorityForApi = (priority) => {
+  if (!priority) return undefined;
+  const p = priority.toString().trim().toUpperCase();
+  if (["URGENT", "STAT", "EMERGENCY", "EMERG"].includes(p)) {
+    return "URGENT";
+  }
+  // everything else is routine for the DB
+  return "Routine";
+};
 
 /* ===========================================================
  * 🧪 TEST REQUEST API CALLS
@@ -33,18 +88,14 @@ async function apiFetch(url, options = {}) {
 
 /** Get all test requests */
 const getAllTestRequests = (token) =>
-  apiFetch(`${API_URL}/`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  apiFetch(`${API_URL}/`, {}, token);
 
 /** Get one test request by ID */
 const getTestRequestById = (requestId, token) => {
   if (!requestId || requestId === "undefined")
     throw new Error("Invalid test request ID");
 
-  return apiFetch(`${API_URL}/${requestId}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  return apiFetch(`${API_URL}/${requestId}`, {}, token);
 };
 
 /** Get all test requests for a specific patient */
@@ -52,9 +103,7 @@ const getTestRequestsByPatientId = (patientId, token) => {
   if (!patientId || patientId === "undefined")
     throw new Error("Invalid patient ID");
 
-  return apiFetch(`${API_URL}/patient/${patientId}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  return apiFetch(`${API_URL}/patient/${patientId}`, {}, token);
 };
 
 /** Update workflow status */
@@ -62,19 +111,22 @@ const updateTestRequestStatus = (requestId, status, token) => {
   if (!requestId) throw new Error("requestId required");
   if (!status) throw new Error("status required");
 
-  return apiFetch(`${API_URL}/${requestId}`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+  return apiFetch(
+    `${API_URL}/${requestId}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ status }),
     },
-    body: JSON.stringify({ status }),
-  });
+    token
+  );
 };
 
-/** Create new test request */
+/** Create new test request (✅ sends priority to backend) */
 const createTestRequest = async (requestData, token) => {
-  const { patientId, testIds = [] } = requestData || {};
+  const { patientId, testIds = [], priority } = requestData || {};
 
   if (!patientId) throw new Error("Patient ID is required");
   if (!Array.isArray(testIds) || testIds.length === 0)
@@ -84,19 +136,30 @@ const createTestRequest = async (requestData, token) => {
     .map((id) => (typeof id === "object" ? Number(id.id) : Number(id)))
     .filter(Boolean);
 
-  const payload = { patientId: Number(patientId), testIds: normalizedTestIds };
+  const payload = {
+    patientId: Number(patientId),
+    testIds: normalizedTestIds,
+  };
+
+  const normalizedPriority = normalizePriorityForApi(priority);
+  if (normalizedPriority) {
+    payload.priority = normalizedPriority; // 🔴 this is what backend uses
+  }
 
   console.log("📦 Sending Test Request Payload:", payload);
 
   try {
-    const result = await apiFetch(`${API_URL}/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+    const result = await apiFetch(
+      `${API_URL}/`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload),
-    });
+      token
+    );
 
     console.log("✅ Test request created:", result);
     return result;
@@ -113,14 +176,17 @@ const processPayment = (requestId, paymentData, token) => {
   if (!paymentData?.paymentMethod)
     throw new Error("paymentMethod required");
 
-  return apiFetch(`${API_URL}/${requestId}/payment`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+  return apiFetch(
+    `${API_URL}/${requestId}/payment`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(paymentData),
     },
-    body: JSON.stringify(paymentData),
-  });
+    token
+  );
 };
 
 /** Fetch result entry template */
@@ -128,9 +194,11 @@ const getResultEntryTemplate = async (requestId, token) => {
   if (!requestId) throw new Error("requestId required");
 
   try {
-    const data = await apiFetch(`${API_URL}/${requestId}/result-entry`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const data = await apiFetch(
+      `${API_URL}/${requestId}/result-entry`,
+      {},
+      token
+    );
     return data;
   } catch (err) {
     console.error("❌ getResultEntryTemplate error:", err.message);
@@ -143,14 +211,17 @@ const saveResultEntry = (requestId, results, token) => {
   if (!Array.isArray(results) || results.length === 0)
     throw new Error("Results array required");
 
-  return apiFetch(`${API_URL}/${requestId}/results`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+  return apiFetch(
+    `${API_URL}/${requestId}/results`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ results }),
     },
-    body: JSON.stringify({ results }),
-  });
+    token
+  );
 };
 
 /** Verify or reject results */
@@ -159,14 +230,17 @@ const verifyResults = (requestId, action, comment, token) => {
   if (!["verify", "reject"].includes(action))
     throw new Error("Action must be 'verify' or 'reject'");
 
-  return apiFetch(`${API_URL}/${requestId}/verify-results`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+  return apiFetch(
+    `${API_URL}/${requestId}/verify-results`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ action, comment }),
     },
-    body: JSON.stringify({ action, comment }),
-  });
+    token
+  );
 };
 
 /* ===========================================================

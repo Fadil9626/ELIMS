@@ -1,288 +1,552 @@
-// src/pages/phlebotomy/PhlebotomyWorklistPage.jsx
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
-// Using Lucide icons for consistency
-import { 
-    Clock, Droplet, Hospital, CheckCircle, ArrowRight, XCircle, 
-    RefreshCcw 
-} from "lucide-react"; 
+import {
+  Clock,
+  Droplet,
+  CheckCircle,
+  ArrowRight,
+  XCircle,
+  RefreshCcw,
+  Search,
+  Printer,
+  User,
+  FlaskConical,
+  AlertTriangle,
+} from "lucide-react";
 import { toast } from "react-hot-toast";
-import phlebotomyService from "../../services/phlebotomyService"; 
+import apiFetch from "../../services/apiFetch";
+import PatientHoverTag from "./PatientHoverTag";
+
+// --- Helpers for Priority ---
+
+const normalizePriority = (priority) => {
+  const val = (priority || "").toString().trim().toUpperCase();
+  if (["URGENT", "STAT", "EMERG", "EMERGENCY"].includes(val)) return "URGENT";
+  return "ROUTINE";
+};
+
+const isUrgentPriority = (priority) => normalizePriority(priority) === "URGENT";
+
+// --- Helper Components ---
+
+const StatCard = ({ title, value, icon: Icon, colorClass, bgClass }) => (
+  <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4 transition-transform hover:scale-[1.01]">
+    <div className={`p-3 rounded-xl ${bgClass} ${colorClass}`}>
+      <Icon size={24} />
+    </div>
+    <div>
+      <p className="text-sm text-gray-500 font-medium">{title}</p>
+      <h3 className="text-2xl font-bold text-gray-900">{value}</h3>
+    </div>
+  </div>
+);
+
+const PriorityBadge = ({ priority }) => {
+  const norm = normalizePriority(priority);
+  const urgent = norm === "URGENT";
+
+  return (
+    <span
+      className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide inline-flex items-center gap-1 border
+      ${
+        urgent
+          ? "bg-red-100 text-red-700 border-red-200"
+          : "bg-blue-50 text-blue-600 border-blue-100"
+      }`}
+    >
+      {urgent && <AlertTriangle size={11} />}
+      {norm}
+    </span>
+  );
+};
+
+// --- Main Page Component ---
 
 export default function PhlebotomyWorklistPage() {
-    // --- STATE ---
-    const [worklist, setWorklist] = useState([]);
-    const [summary, setSummary] = useState({ 
-        pending: 0, 
-        collected: 0, 
-        collectionsToday: 0
-    });
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
-    const [statusFilter, setStatusFilter] = useState("Pending"); 
+  const [worklist, setWorklist] = useState([]);
+  const [summary, setSummary] = useState({
+    pending: 0,
+    collected: 0,
+    collectionsToday: 0,
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [statusFilter, setStatusFilter] = useState("SampleReceived");
+  const [searchTerm, setSearchTerm] = useState("");
 
-    // ✅ **NEW**: State for the confirmation modal
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [selectedRequest, setSelectedRequest] = useState(null);
-    const [isSubmitting, setIsSubmitting] = useState(false);
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const token = JSON.parse(localStorage.getItem("userInfo"))?.token;
+  const fetchWorklist = useCallback(async () => {
+    setLoading(true);
+    setError(null);
 
-    // --- DATA FETCHING (Memoized & Parallel) ---
-    const fetchWorklist = useCallback(async () => {
-        setLoading(true);
-        setError(null);
-        if (!token) {
-            setError("Authentication required.");
-            setLoading(false);
-            return;
-        }
-        
-        try {
-            const [summaryData, worklistData] = await Promise.all([
-                phlebotomyService.getSummary(token),
-                phlebotomyService.getWorklist({ status: statusFilter }, token)
-            ]);
-            
-            setSummary({
-                pending: summaryData.pending || 0,
-                collected: summaryData.collected || 0,
-                collectionsToday: summaryData.collectionsToday || 0 
-            }); 
+    try {
+      const [summaryData, worklistData] = await Promise.all([
+        apiFetch("/api/phlebotomy/summary"),
+        apiFetch(`/api/phlebotomy/worklist?status=${statusFilter}`),
+      ]);
 
-            setWorklist(worklistData || []);
-        } catch (err) {
-            console.error("❌ Phlebotomy Fetch Error:", err);
-            const errorMsg = "Failed to load worklist. Check server connection or required 'phlebotomy:view' permissions.";
-            setError(errorMsg);
-        } finally {
-            setLoading(false);
-        }
-    }, [statusFilter, token]);
+      setSummary({
+        pending: summaryData.pending || 0,
+        collected: summaryData.collected || 0,
+        collectionsToday: summaryData.collectionsToday || 0,
+      });
 
-    useEffect(() => {
-        fetchWorklist();
-    }, [fetchWorklist]);
+      const list = Array.isArray(worklistData)
+        ? worklistData
+        : worklistData.items || [];
 
-    // --- HANDLERS ---
+      setWorklist(list);
+    } catch (err) {
+      console.error("❌ Phlebotomy Fetch Error:", err);
+      setError(err.message || "Failed to load worklist.");
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter]);
 
-    // ✅ **NEW**: Step 1 - Open the modal and store the item
-    const openCollectionModal = (requestItem) => {
-        setSelectedRequest(requestItem);
-        setIsModalOpen(true);
-    };
+  useEffect(() => {
+    fetchWorklist();
+  }, [fetchWorklist]);
 
-    // ✅ **NEW**: Close the modal
-    const closeCollectionModal = () => {
-        setIsModalOpen(false);
-        setSelectedRequest(null);
-    };
+  // --- HANDLERS ---
 
-    // ✅ **NEW**: Step 2 - Run the API call from the modal
-    const handleConfirmCollection = async () => {
-        if (!selectedRequest) return;
-        
-        setIsSubmitting(true);
-        try {
-            const response = await phlebotomyService.markSampleAsCollected(selectedRequest.id, token);
-            toast.success(response.message || "✅ Sample collected!");
-            
-            fetchWorklist(); // Refresh the main list
-            closeCollectionModal(); // Close the popup
-        } catch (err) {
-            console.error("Collection error:", err);
-            const errorMsg = err.message || `Failed to mark sample collection for Request #${selectedRequest.id}.`;
-            toast.error(errorMsg);
-            setError(errorMsg); 
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
+  const openCollectionModal = (item) => {
+    setSelectedRequest(item);
+    setIsModalOpen(true);
+  };
+
+  const closeCollectionModal = () => {
+    setIsModalOpen(false);
+    setSelectedRequest(null);
+  };
+
+  const handleConfirmCollection = async () => {
+    if (!selectedRequest) return;
+    setIsSubmitting(true);
+    try {
+      const response = await apiFetch(
+        `/api/phlebotomy/collect/${selectedRequest.id}`,
+        { method: "PUT" }
+      );
+      toast.success(response.message || "✅ Sample collected!");
+      fetchWorklist();
+      closeCollectionModal();
+    } catch (err) {
+      toast.error(err.message || `Failed to collect sample.`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePrintLabel = (e, item) => {
+    e.stopPropagation();
+    toast("Printing Label...", { icon: "🖨️" });
+  };
+
+  // 🔑 FIX: Combine filtering and sorting into a single useMemo block
+  const sortedAndFilteredWorklist = useMemo(() => {
+    // 1. Filtering
+    const term = searchTerm.toLowerCase();
+    const filtered = worklist.filter((item) => {
+      const fullName = `${item.first_name || ""} ${
+        item.last_name || ""
+      }`.toLowerCase();
+      const labId = (item.lab_id || "").toLowerCase();
+      return fullName.includes(term) || labId.includes(term);
+    });
+
+    // 2. Sorting (slice() creates a shallow copy before sorting)
+    const sorted = filtered.slice().sort((a, b) => {
+      const pa = isUrgentPriority(a.priority) ? 1 : 0;
+      const pb = isUrgentPriority(b.priority) ? 1 : 0;
+      
+      // Primary sort: urgent first
+      if (pa !== pb) return pb - pa; 
+      
+      // Secondary sort: Created date (newer first)
+      const dateA = new Date(a.created_at || 0).getTime();
+      const dateB = new Date(b.created_at || 0).getTime();
+      return dateB - dateA;
+    });
     
-    // --- RENDER HELPERS ---
-    const StatusBadge = ({ status }) => {
-        let color = "bg-gray-100 text-gray-700";
-        if (status === "Pending") color = "bg-yellow-100 text-yellow-700";
-        if (status === "SampleCollected") color = "bg-blue-100 text-blue-700";
-        if (status === "Verified" || status === "Completed") color = "bg-green-100 text-green-700";
-        return (
-            <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${color}`}>
-                {status}
-            </span>
-        );
-    };
+    return sorted;
+  }, [worklist, searchTerm]);
 
-    const KpiCard = ({ icon: Icon, value, label, colorClass, borderColorClass }) => (
-        <div className={`p-4 bg-white rounded-xl shadow-md border-l-4 ${borderColorClass}`}>
-            <div className={`flex items-center gap-3`}>
-                <Icon size={20} className={colorClass} />
-                <p className="text-xl font-bold text-gray-800">{value}</p>
-            </div>
-            <p className="text-sm text-gray-500 mt-1">{label}</p>
-        </div>
-    );
-    
+  const urgentWaitingCount = worklist.filter((w) =>
+    isUrgentPriority(w.priority)
+  ).length;
 
-    return (
-        <div className="p-6 md:p-8 bg-gray-50 min-h-screen space-y-8">
-            <h1 className="text-3xl font-extrabold text-gray-900 border-b pb-3 flex items-center gap-2">
-                <Droplet size={30} className="text-red-500" /> Phlebotomy Worklist
-            </h1>
+  return (
+    <div className="p-6 md:p-8 bg-gray-50 min-h-screen space-y-8">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+            Phlebotomy Dashboard
+          </h1>
+          <p className="text-gray-500 text-sm">
+            Manage patient queues and sample collection. Urgent cases are
+            highlighted.
+          </p>
+          <p className="text-xs text-red-600 mt-1">
+            {urgentWaitingCount > 0
+              ? `${urgentWaitingCount} urgent case${
+                  urgentWaitingCount > 1 ? "s" : ""
+                } waiting for collection.`
+              : "No urgent cases in the queue."}
+          </p>
+        </div>
+        <div className="text-right hidden md:block">
+          <span className="text-xs font-mono text-gray-500 bg-white border px-3 py-1.5 rounded-lg">
+            {new Date().toLocaleDateString(undefined, {
+              weekday: "long",
+              year: "numeric",
+              month: "long",
+              day: "numeric",
+            })}
+          </span>
+        </div>
+      </div>
 
-            {error && (
-                <div className="p-3 bg-red-100 text-red-700 rounded-lg border border-red-300 font-medium">
-                    <XCircle size={18} className="inline mr-2" /> Error: {error}
+      {error && (
+        <div className="p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 flex items-center gap-3">
+          <XCircle size={20} /> <span className="font-medium">{error}</span>
+        </div>
+      )}
+
+      {/* Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <StatCard
+          title="Pending Requests"
+          value={summary.pending}
+          icon={Clock}
+          colorClass="text-amber-600"
+          bgClass="bg-amber-50"
+        />
+        <StatCard
+          title="URGENT Cases"
+          value={urgentWaitingCount}
+          icon={AlertTriangle}
+          colorClass="text-red-600"
+          bgClass="bg-red-50"
+        />
+        <StatCard
+          title="Collected Today"
+          value={summary.collectionsToday}
+          icon={CheckCircle}
+          colorClass="text-emerald-600"
+          bgClass="bg-emerald-50"
+        />
+      </div>
+
+      {/* Toolbar */}
+      <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-col sm:flex-row gap-4 justify-between items-center">
+        <div className="relative w-full sm:max-w-md">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <Search className="text-gray-400" size={18} />
+          </div>
+          <input
+            type="text"
+            placeholder="Search patient name or ID..."
+            className="block w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-xl leading-5 bg-gray-50 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 sm:text-sm"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="border border-gray-300 bg-white p-2.5 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+          >
+            <option value="Pending">Pending (Payment)</option>
+            <option value="SampleReceived">Sample Received (Queue)</option>
+            <option value="SampleCollected">Sample Collected</option>
+            <option value="All">All Requests</option>
+          </select>
+
+          <button
+            onClick={fetchWorklist}
+            className="p-2.5 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors border border-transparent hover:border-indigo-100"
+          >
+            <RefreshCcw
+              size={20}
+              className={loading ? "animate-spin" : ""}
+            />
+          </button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white shadow-sm rounded-2xl overflow-hidden border border-gray-200">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Patient Info
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Location
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Tests
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Priority
+              </th>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {loading && worklist.length === 0 ? (
+              <tr>
+                <td colSpan="5" className="p-12 text-center text-gray-500">
+                  <Clock
+                    size={24}
+                    className="inline mb-2 animate-spin text-indigo-500"
+                  />
+                  <br />
+                  Loading queue...
+                </td>
+              </tr>
+            ) : sortedAndFilteredWorklist.length === 0 ? (
+              <tr>
+                <td
+                  colSpan="5"
+                  className="p-12 text-center text-gray-400 italic"
+                >
+                  No matching patients found.
+                </td>
+              </tr>
+            ) : (
+              sortedAndFilteredWorklist.map((item) => {
+                const urgent = isUrgentPriority(item.priority);
+                return (
+                  <tr
+                    key={item.id}
+                    className={`hover:bg-indigo-50/30 transition-colors group ${
+                      urgent ? "bg-red-50/60 border-l-4 border-red-600" : ""
+                    }`}
+                  >
+                    {/* Patient + popover */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold text-sm ${
+                            urgent ? 'bg-red-200 text-red-800' : 'bg-indigo-100 text-indigo-700'
+                          }`}>
+                          {item.first_name ? (
+                            item.first_name.charAt(0)
+                          ) : (
+                            <User size={16} />
+                          )}
+                        </div>
+                        <div className="ml-4">
+                          <div className="text-sm font-medium text-gray-900">
+                            <PatientHoverTag
+                              name={`${item.first_name || ""} ${
+                                item.last_name || ""
+                              }`.trim()}
+                              labId={item.lab_id}
+                              gender={item.gender}
+                              dateOfBirth={item.date_of_birth}
+                              wardName={item.ward_name}
+                            />
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 mt-1">
+                            <span className="text-xs text-gray-500 font-mono">
+                              ID: {item.lab_id}
+                            </span>
+                            {urgent && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-red-600 text-white text-[10px] font-semibold uppercase shadow-sm">
+                                <AlertTriangle size={11} /> Urgent
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+
+                    {/* Location */}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-gray-100 text-gray-600 text-xs font-medium">
+                        {item.ward_name || "OPD / Walk-in"}
+                      </span>
+                    </td>
+
+                    {/* Tests */}
+                    <td className="px-6 py-4">
+                      <div
+                        className="text-sm text-gray-900 max-w-xs truncate"
+                        title={item.tests ? item.tests.join(", ") : ""}
+                      >
+                        {item.tests ? (
+                          item.tests.join(", ")
+                        ) : (
+                          <span className="text-gray-400 italic">
+                            None listed
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Priority */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <PriorityBadge priority={item.priority} />
+                    </td>
+
+                    {/* Actions */}
+                    <td className="px-6 py-4 whitespace-nowrap text-center">
+                      <div className="flex justify-center items-center gap-2">
+                        <button
+                          onClick={(e) => handlePrintLabel(e, item)}
+                          className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition"
+                          title="Print Label"
+                        >
+                          <Printer size={18} />
+                        </button>
+                        {item.status === "Pending" ||
+                        item.status === "SampleReceived" ? (
+                          <button
+                            onClick={() => openCollectionModal(item)}
+                            className={`px-4 py-1.5 rounded-lg text-xs font-medium shadow-sm flex items-center gap-1.5 ${
+                              urgent
+                                ? "bg-red-600 hover:bg-red-700 text-white"
+                                : "bg-indigo-600 hover:bg-indigo-700 text-white"
+                            }`}
+                          >
+                            <Droplet size={14} /> Collect
+                          </button>
+                        ) : (
+                          <Link
+                            to={`/tests/requests/${item.id}`}
+                            className="text-indigo-600 hover:text-indigo-800 text-xs font-medium flex items-center gap-1 hover:underline"
+                          >
+                            View <ArrowRight size={14} />
+                          </Link>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Confirmation Modal */}
+      {isModalOpen && selectedRequest && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+          <div className="bg-white p-6 rounded-2xl shadow-xl w-full max-w-md border border-gray-100">
+            <div className="flex items-center gap-3 mb-5 border-b border-gray-100 pb-4">
+              <div className="bg-indigo-100 p-2 rounded-full text-indigo-600">
+                <Droplet size={24} />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">
+                  Confirm Collection
+                </h2>
+                <p className="text-xs text-gray-500">
+                  Please verify patient identity and tests.
+                </p>
+              </div>
+            </div>
+
+            {/* Patient + Lab ID */}
+            <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 mb-4">
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <p className="text-xs text-gray-500 uppercase font-semibold">
+                    Patient Name
+                  </p>
+                  <p className="text-lg font-bold text-gray-900">
+                    {selectedRequest.first_name} {selectedRequest.last_name}
+                  </p>
+                  
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-gray-500 uppercase font-semibold">
+                    Lab ID
+                  </p>
+                  <p className="text-sm font-mono font-bold text-gray-700 bg-white px-2 py-0.5 rounded border">
+                    {selectedRequest.lab_id}
+                  </p>
+                </div>
+              </div>
+              
+              {/* Priority in Modal Header */}
+              {isUrgentPriority(selectedRequest.priority) && (
+                <div className="flex items-center justify-between mt-3 p-2 bg-red-100 border border-red-300 rounded-lg">
+                    <p className="text-sm font-bold text-red-700 flex items-center gap-2">
+                        <AlertTriangle size={16} /> URGENT PRIORITY
+                    </p>
+                    <PriorityBadge priority={selectedRequest.priority} />
                 </div>
-            )}
+              )}
 
-            {/* KPI Cards (3-col grid, STAT removed) */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <KpiCard 
-                    icon={Clock} 
-                    value={summary.pending} 
-                    label="Awaiting Collection" 
-                    colorClass="text-yellow-600" 
-                    borderColorClass="border-l-yellow-500" 
-                />
-                <KpiCard 
-                    icon={Droplet} 
-                    value={summary.collected} 
-                    label="Total Collected" 
-                    colorClass="text-blue-600" 
-                    borderColorClass="border-l-blue-500" 
-                />
-                <KpiCard 
-                    icon={CheckCircle} 
-                    value={summary.collectionsToday} 
-                    label="Collected Today" 
-                    colorClass="text-green-600" 
-                    borderColorClass="border-l-green-500" 
-                />
-            </div>
+              {/* Tests list */}
+              <div className="mt-3">
+                <p className="text-xs text-gray-500 uppercase font-semibold mb-1 flex items-center gap-1.5">
+                  <FlaskConical size={14} className="text-indigo-500" />
+                  Tests to Collect
+                </p>
+                {Array.isArray(selectedRequest.tests) &&
+                selectedRequest.tests.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {selectedRequest.tests.map((t, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center px-2 py-0.5 rounded-full bg-white border border-gray-200 text-[11px] text-gray-700"
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-400 italic mt-1">
+                    No tests listed for this request.
+                  </p>
+                )}
+              </div>
+            </div>
 
-            {/* Filters and List Title */}
-            <div className="flex justify-between items-center pt-4 border-t">
-                <h2 className="text-xl font-semibold text-gray-700">Requests for Action</h2>
-                <div className="flex items-center gap-3">
-                    <button onClick={fetchWorklist} className="text-gray-600 hover:text-gray-900 transition">
-                        <RefreshCcw size={18} className={loading ? 'animate-spin' : ''} />
-                    </button>
-                    <select
-                        value={statusFilter}
-                        onChange={(e) => setStatusFilter(e.target.value)}
-                        className="border bg-white p-2 rounded-lg text-sm"
-                    >
-                        <option value="Pending">Awaiting Sample Collection</option>
-                        <option value="SampleCollected">Collected Samples</option>
-                        <option value="All">View All Statuses</option>
-                    </select>
-                </div>
-            </div>
-
-            {/* Worklist Table */}
-            <div className="bg-white shadow-lg rounded-xl overflow-hidden border">
-                <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-100">
-                        <tr>
-                            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Request ID</th>
-                            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Patient / ID</th>
-                            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
-                            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Tests Required</th>
-                            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                            <th className="p-3 text-center text-xs font-medium text-gray-500 uppercase">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-100">
-                        {loading && worklist.length === 0 ? (
-                            <tr><td colSpan="6" className="p-8 text-center text-gray-500"><Clock size={16} className="inline mr-2 animate-spin" /> Loading worklist...</td></tr>
-                        ) : worklist.length === 0 ? (
-                            <tr><td colSpan="6" className="p-8 text-center text-gray-500 italic">No tasks found for the selected status.</td></tr>
-                        ) : (
-                            worklist.map((item) => (
-                                <tr key={item.id} className="hover:bg-gray-50">
-                                    <td className="p-3 font-mono text-xs text-gray-800">{item.id}</td>
-                                    <td className="p-3 text-sm text-gray-900">
-                                        <p className="font-semibold">{item.first_name} {item.last_name}</p>
-                                        <p className="text-xs text-gray-500">{item.lab_id}</p>
-                                    </td>
-                                    <td className="p-3 text-sm text-gray-700 flex items-center gap-1">
-                                        <Hospital size={14} className="text-indigo-400" /> {item.ward_name || 'OPD'}
-                                    </td>
-                                    <td className="p-3 text-xs text-gray-600">{item.tests ? item.tests.join(', ') : 'N/A'}</td>
-                                    <td className="p-3"><StatusBadge status={item.status} /></td>
-                                    <td className="p-3 text-center">
-                                        {item.status === 'Pending' ? (
-                                            <button
-                                                // ✅ **NEW**: Changed handler
-                                                onClick={() => openCollectionModal(item)}
-                                                className="bg-green-600 text-white px-3 py-1 rounded-lg text-xs font-medium hover:bg-green-700 transition flex items-center justify-center gap-1 mx-auto"
-                                            >
-                                                <CheckCircle size={14} /> Collect Sample
-                                            </button>
-                                        ) : (
-                                            <Link to={`/tests/requests/${item.id}`} className="text-blue-600 hover:underline text-xs font-medium flex items-center justify-center gap-1 mx-auto">
-                                                View Request <ArrowRight size={14} />
-                                            </Link>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))
-                        )}
-                    </tbody>
-                </table>
-            </div>
-
-            {/* --- ✅ NEW Confirmation Modal --- */}
-            {isModalOpen && selectedRequest && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white p-6 rounded-xl shadow-2xl w-full max-w-md">
-                        <h2 className="text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
-                            <Droplet size={24} className="text-red-500" />
-                            Confirm Sample Collection
-                        </h2>
-                        <p className="text-sm text-gray-600 mb-4">
-                            Please confirm collection for patient: <br />
-                            <strong className="text-lg">{selectedRequest.first_name} {selectedRequest.last_name}</strong>
-                            <span className="text-gray-500"> (ID: {selectedRequest.lab_id})</span>
-                        </p>
-
-                        <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 max-h-40 overflow-y-auto mb-6">
-                            <h4 className="font-semibold mb-2 text-gray-700">Tests to Collect:</h4>
-                            <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-                                {selectedRequest.tests && selectedRequest.tests.length > 0 ? (
-                                    selectedRequest.tests.map((test, index) => (
-                                    <li key={index}>{test}</li>
-                                    ))
-                                ) : (
-                                    <li>No tests listed</li>
-                                )}
-                            </ul>
-                        </div>
-
-                        <div className="flex justify-end gap-3 mt-6">
-                            <button
-                                type="button"
-                                onClick={closeCollectionModal}
-                                disabled={isSubmitting}
-                                className="bg-gray-200 px-4 py-2 rounded-lg hover:bg-gray-300 text-gray-800 font-medium transition"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
-                                onClick={handleConfirmCollection}
-                                disabled={isSubmitting}
-                                className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 font-medium transition flex items-center gap-2 disabled:bg-gray-400"
-                            >
-                                {isSubmitting ? <Clock className="animate-spin" size={18} /> : <CheckCircle size={18} />}
-                                {isSubmitting ? "Collecting..." : "Confirm Collection"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-            {/* --- End of Modal --- */}
-
-        </div>
-    );
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeCollectionModal}
+                disabled={isSubmitting}
+                className="px-5 py-2.5 rounded-xl text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCollection}
+                disabled={isSubmitting}
+                className={`px-5 py-2.5 rounded-xl text-sm font-medium text-white shadow-md transition-all flex items-center gap-2 disabled:opacity-70 ${
+                    isUrgentPriority(selectedRequest?.priority) 
+                        ? 'bg-red-600 hover:bg-red-700' 
+                        : 'bg-indigo-600 hover:bg-indigo-700'
+                }`}
+              >
+                {isSubmitting ? (
+                  <Clock className="animate-spin" size={18} />
+                ) : (
+                  <CheckCircle size={18} />
+                )}
+                {isSubmitting ? "Processing..." : "Confirm & Collect"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

@@ -1,26 +1,44 @@
-// src/pages/admin/tabs/UnitsTab.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { PlusCircle, Trash2, Pencil, XCircle, Save, Ruler } from "lucide-react";
 import toast from "react-hot-toast";
-import labConfigService from "../../../services/labConfigService";
+import apiFetch from "../../../services/apiFetch"; // 🚀 1. Import apiFetch
 
 export default function UnitsTab() {
   const [units, setUnits] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ unit_name: "", symbol: "", description: "" });
-  const token = JSON.parse(localStorage.getItem("userInfo"))?.token;
+  
+  // 🚀 2. REMOVED manual token management
 
-  const loadUnits = async () => {
+  const loadUnits = useCallback(async () => { // 🚀 3. Added useCallback
     try {
-      const data = await labConfigService.getUnits(token);
-      setUnits(data || []);
+      // 🚀 4. Use apiFetch with the correct URL from the logs
+      const data = await apiFetch("/api/lab-config/units");
+      
+      // ✅ --- FIX for "units.map is not a function" ---
+      // Ensure we always set an array to prevent crashes
+      if (Array.isArray(data)) {
+        setUnits(data);
+      } else if (data && Array.isArray(data.units)) {
+        setUnits(data.units); // Handle cases like { units: [...] }
+      } else if (data && Array.isArray(data.data)) {
+        setUnits(data.data); // Handle cases like { data: [...] }
+      } else {
+        console.error("Expected an array of units, but received:", data);
+        setUnits([]); // Default to empty array on weird response
+      }
+      // --- End of Fix ---
+
     } catch {
       toast.error("❌ Failed to load units");
+      setUnits([]); // Also set to empty on error to prevent crash
     }
-  };
+  }, []); // Stable dependency
 
-  useEffect(() => { loadUnits(); }, []);
+  useEffect(() => { 
+    loadUnits(); 
+  }, [loadUnits]);
 
   const openAdd = () => {
     setEditing(null);
@@ -33,7 +51,7 @@ export default function UnitsTab() {
     setForm({
       unit_name: u.unit_name,
       symbol: u.symbol,
-      description: u.description,
+      description: u.description || "", // Handle null description
     });
     setShowModal(true);
   };
@@ -41,17 +59,16 @@ export default function UnitsTab() {
   const handleSave = async (e) => {
     e.preventDefault();
     try {
-      const url = editing ? `/api/units/${editing.id}` : "/api/units";
+      // 🚀 5. Use apiFetch for save/update
+      // (Assuming /api/lab-config/units based on your other files)
+      const url = editing ? `/api/lab-config/units/${editing.id}` : "/api/lab-config/units";
       const method = editing ? "PUT" : "POST";
-      const res = await fetch(url, {
+      
+      await apiFetch(url, {
         method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify(form),
       });
-      if (!res.ok) throw new Error("Failed");
+      
       toast.success(editing ? "✅ Unit updated" : "✅ Unit added");
       setShowModal(false);
       loadUnits();
@@ -63,11 +80,10 @@ export default function UnitsTab() {
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this unit?")) return;
     try {
-      const res = await fetch(`/api/units/${id}`, {
+      // 🚀 6. Use apiFetch for delete
+      await apiFetch(`/api/lab-config/units/${id}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error("Failed");
       toast.success("🗑️ Unit deleted");
       loadUnits();
     } catch {
@@ -100,6 +116,7 @@ export default function UnitsTab() {
           </tr>
         </thead>
         <tbody>
+          {/* This .map call is now safe */}
           {units.map((u) => (
             <tr key={u.id} className="border-t hover:bg-gray-50">
               <td className="p-2">{u.unit_name}</td>

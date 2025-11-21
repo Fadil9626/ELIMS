@@ -1,26 +1,29 @@
-// src/pages/admin/tabs/DepartmentsTab.jsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { PlusCircle, Trash2, Pencil, XCircle, Save, Building2 } from "lucide-react";
 import toast from "react-hot-toast";
-import labConfigService from "../../../services/labConfigService";
+import apiFetch from "../../../services/apiFetch"; // 🚀 1. Import apiFetch
 
 export default function DepartmentsTab() {
   const [departments, setDepartments] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ name: "", description: "" });
-  const token = JSON.parse(localStorage.getItem("userInfo"))?.token;
+  
+  // 🚀 2. REMOVED manual token management
 
-  const loadDepartments = async () => {
+  const loadDepartments = useCallback(async () => { // 🚀 3. Added useCallback
     try {
-      const data = await labConfigService.getDepartments(token);
+      // 🚀 4. Use apiFetch to get departments
+      const data = await apiFetch("/api/departments");
       setDepartments(data || []);
     } catch {
       toast.error("❌ Failed to load departments");
     }
-  };
+  }, []); // Empty dependency array, loadDepartments is stable
 
-  useEffect(() => { loadDepartments(); }, []);
+  useEffect(() => { 
+    loadDepartments(); 
+  }, [loadDepartments]);
 
   const openAdd = () => {
     setEditing(null);
@@ -37,23 +40,21 @@ export default function DepartmentsTab() {
   const handleSave = async (e) => {
     e.preventDefault();
     try {
+      // 🚀 5. Use apiFetch for save/update
       const url = editing
         ? `/api/departments/${editing.id}`
         : "/api/departments";
       const method = editing ? "PUT" : "POST";
-      const res = await fetch(url, {
+
+      await apiFetch(url, {
         method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify(form),
       });
-      if (!res.ok) throw new Error("Failed");
+
       toast.success(editing ? "✅ Department updated" : "✅ Department added");
       setShowModal(false);
       setEditing(null);
-      loadDepartments();
+      loadDepartments(); // Refresh list
     } catch {
       toast.error("❌ Failed to save department");
     }
@@ -62,13 +63,12 @@ export default function DepartmentsTab() {
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this department?")) return;
     try {
-      const res = await fetch(`/api/departments/${id}`, {
+      // 🚀 6. Use apiFetch for delete
+      await apiFetch(`/api/departments/${id}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error("Failed");
       toast.success("🗑️ Department deleted");
-      loadDepartments();
+      loadDepartments(); // Refresh list
     } catch {
       toast.error("❌ Delete failed");
     }

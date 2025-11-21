@@ -1,4 +1,3 @@
-// routes/testRequestRoutes.js
 const express = require("express");
 const router = express.Router();
 const testRequestController = require("../controllers/testRequestController");
@@ -8,14 +7,18 @@ const { protect, authorize } = require("../middleware/authMiddleware");
 // 🔢 Validate numeric route params
 // ============================================================
 router.param("id", (req, res, next, id) => {
-  if (!/^\d+$/.test(String(id)))
+  if (!/^\d+$/.test(String(id))) {
     return res.status(400).json({ message: "Invalid ID (must be numeric)" });
+  }
   next();
 });
 
 router.param("patientId", (req, res, next, patientId) => {
-  if (!/^\d+$/.test(String(patientId)))
-    return res.status(400).json({ message: "Invalid Patient ID (must be numeric)" });
+  if (!/^\d+$/.test(String(patientId))) {
+    return res
+      .status(400)
+      .json({ message: "Invalid Patient ID (must be numeric)" });
+  }
   next();
 });
 
@@ -24,27 +27,43 @@ router.param("patientId", (req, res, next, patientId) => {
 // ============================================================
 
 // 🔹 List all requests
-router.get("/", protect, authorize("tests", "view"), testRequestController.getAllTestRequests);
+router.get(
+  "/",
+  protect,
+  authorize(["test_requests:view", "tests:view"]),
+  testRequestController.getAllTestRequests
+);
 
 // 🔹 Create a new request
-router.post("/", protect, authorize("tests", "create"), testRequestController.createTestRequest);
+router.post(
+  "/",
+  protect,
+  authorize(["test_requests:create", "tests:create"]),
+  testRequestController.createTestRequest
+);
 
 // 🔹 Get all test requests for a specific patient
 router.get(
   "/patient/:patientId",
   protect,
-  authorize("patients", "view"),
+  authorize(["patients:view", "test_requests:view"]),
   testRequestController.getTestRequestsByPatientId
 );
 
 // 🔹 Get one test request
-router.get("/:id", protect, authorize("tests", "view"), testRequestController.getTestRequestById);
+router.get(
+  "/:id",
+  protect,
+  authorize(["test_requests:view", "tests:view"]),
+  testRequestController.getTestRequestById
+);
 
-// 🔹 Update request status
+// 🔹 Update request status (Verified / Released)
+// ✅ ONLY people who can VERIFY in Pathology can flip the overall request status
 router.patch(
   "/:id/status",
   protect,
-  authorize("tests", "update"),
+  authorize("pathology", "verify"), // 👈 key line
   testRequestController.updateTestRequestStatus
 );
 
@@ -52,9 +71,10 @@ router.patch(
 router.get(
   "/:id/results",
   protect,
-  authorize("pathology", "view"),
+  authorize(["pathology:view", "test_requests:view"]),
   testRequestController.getResultEntry
 );
+
 router.post(
   "/:id/results",
   protect,
@@ -62,19 +82,19 @@ router.post(
   testRequestController.saveResultEntry
 );
 
-// 🔹 Verify or Reject
+// 🔹 Verify or Reject on legacy endpoint (if still used)
 router.post(
   "/:id/verify",
   protect,
-  authorize("pathology", "verify"),
+  authorize(["pathology:verify", "pathology:update"]),
   testRequestController.verifyResults
 );
 
-// 💳 PAYMENT — DEBUGGING (Middleware temporarily disabled)
+// 💳 PAYMENT
 router.post(
   "/:id/payment",
-  // protect, // <-- Temporarily disabled for testing
-  // authorize("billing", "create"), // <-- Temporarily disabled for testing
+  protect,
+  authorize(["billing:create", "test_requests:update"]),
   testRequestController.processPayment
 );
 

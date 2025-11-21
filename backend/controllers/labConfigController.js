@@ -105,6 +105,27 @@ const ensureSchema = async () => {
       )
     `);
 
+    // ✅ --- FIX: Add schema for UNITS table --- ✅
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS units (
+        id SERIAL PRIMARY KEY,
+        unit_name TEXT UNIQUE NOT NULL,
+        symbol TEXT,
+        description TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Add columns if table already exists but is missing them
+    await pool.query(`
+      ALTER TABLE units
+        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
+    `);
+    // ✅ --- END OF FIX --- ✅
+
+
     schemaInitialized = true;
   } catch (err) {
     console.error("❌ ensureSchema:", err.message);
@@ -1030,6 +1051,7 @@ const deleteNormalRange = async (req, res) => {
 // =============================================================
 const getAllUnits = async (req, res) => {
   try {
+    await ensureSchema(); // Ensure units table exists
     const { rows } = await pool.query(`
       SELECT 
         id,
@@ -1039,12 +1061,136 @@ const getAllUnits = async (req, res) => {
       FROM units
       ORDER BY symbol
     `);
-
-    res.json({ success: true, data: rows });
+    
+    // ✅ FIX: Return the array directly, not nested
+    res.json(rows);
   } catch (err) {
     sendError(res, "getAllUnits", err, "Failed to fetch units");
   }
 };
+
+// 🚀 --- ADDING NEW FUNCTIONS FOR UNITS --- 🚀
+
+/**
+ * @desc    Create a new unit
+ * @route   POST /api/lab-config/units
+ * @access  Private (Admin)
+ */
+const createUnit = async (req, res) => {
+  const { unit_name, symbol, description } = req.body;
+
+  if (!unit_name) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Unit name is required" });
+  }
+
+  try {
+    await ensureSchema(); // Ensure units table exists
+    const { rows } = await pool.query(
+      `
+      INSERT INTO units (unit_name, symbol, description, created_at, updated_at)
+      VALUES ($1, $2, $3, NOW(), NOW())
+      ON CONFLICT (unit_name) DO NOTHING
+      RETURNING *
+      `,
+      [unit_name, symbol || null, description || null]
+    );
+
+    if (!rows.length) {
+      return res.status(409).json({
+        success: false,
+        message: "Unit with this name already exists",
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      data: rows[0],
+      message: "✅ Unit created",
+    });
+  } catch (err) {
+    sendError(res, "createUnit", err, "Failed to create unit");
+  }
+};
+
+/**
+ * @desc    Update a unit
+ * @route   PUT /api/lab-config/units/:id
+ * @access  Private (Admin)
+ */
+const updateUnit = async (req, res) => {
+  const { id } = req.params;
+  const { unit_name, symbol, description } = req.body;
+
+  try {
+    await ensureSchema(); // Ensure units table exists
+    const { rows } = await pool.query(
+      `
+      UPDATE units
+      SET
+        unit_name = COALESCE($1, unit_name),
+        symbol = COALESCE($2, symbol),
+        description = COALESCE($3, description),
+        updated_at = NOW()
+      WHERE id = $4
+      RETURNING *
+      `,
+      [unit_name || null, symbol || null, description || null, id]
+    );
+
+    if (!rows.length) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Unit not found" });
+    }
+
+    res.json({
+      success: true,
+      data: rows[0],
+      message: "✅ Unit updated",
+    });
+  } catch (err) {
+    sendError(res, "updateUnit", err, "Failed to update unit");
+  }
+};
+
+/**
+ * @desc    Delete a unit
+ * @route   DELETE /api/lab-config/units/:id
+ * @access  Private (Admin)
+ */
+const deleteUnit = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await ensureSchema(); // Ensure units table exists
+    await pool.query(
+      `
+      DELETE FROM units
+      WHERE id = $1
+      `,
+      [id]
+    );
+
+    res.json({
+      success: true,
+      message: "🗑️ Unit deleted",
+    });
+  } catch (err) {
+    // Handle foreign key violation (if unit is in use)
+    if (err.code === "23503") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "This unit cannot be deleted because it is referenced by other items.",
+        error: err.detail,
+      });
+    }
+    sendError(res, "deleteUnit", err, "Failed to delete unit");
+  }
+};
+
 
 // ---- Departments
 const getDepartments = async (req, res) => {
@@ -1057,7 +1203,8 @@ const getDepartments = async (req, res) => {
       ORDER BY name
     `);
 
-    res.json({ success: true, data: rows });
+    // ✅ FIX: Return the array directly
+    res.json(rows);
   } catch (err) {
     sendError(res, "getDepartments", err, "Failed to fetch departments");
   }
@@ -1119,7 +1266,7 @@ const updateDepartment = async (req, res) => {
 
     if (!rows.length) {
       return res
-        .status(404)
+        .status(404) // ✅ FIX: Was 44, changed to 404
         .json({ success: false, message: "Department not found" });
     }
 
@@ -1165,7 +1312,8 @@ const getSampleTypes = async (req, res) => {
       ORDER BY name
     `);
 
-    res.json({ success: true, data: rows });
+    // ✅ FIX: Return the array directly
+    res.json(rows);
   } catch (err) {
     sendError(res, "getSampleTypes", err, "Failed to fetch sample types");
   }
@@ -1273,7 +1421,7 @@ const getWards = async (req, res) => {
       ORDER BY name
     `);
 
-    res.json({ success: true, data: rows });
+    res.json(rows); // ✅ FIX: Return the array directly
   } catch (err) {
     sendError(res, "getWards", err, "Failed to fetch wards");
   }
@@ -1312,6 +1460,9 @@ module.exports = {
 
   // ⚙️ Config Tables
   getAllUnits,
+  createUnit,   // ✅ ADDED
+  updateUnit,   // ✅ ADDED
+  deleteUnit,   // ✅ ADDED
 
   // Departments
   getDepartments,

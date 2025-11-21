@@ -1,23 +1,21 @@
 // ============================================================
-// AUTH MIDDLEWARE (Enhanced Stable Version)
-// protect → validates JWT + loads roles + permissions
-// authorize(resource, action) → checks permissions (case-insensitive)
+// AUTH MIDDLEWARE (RBAC Stable / Fully Patched Version)
 // ============================================================
 
 const jwt = require("jsonwebtoken");
 const pool = require("../config/database");
 
-// Optional audit logger – if available
-let logAuditEvent = async () => {};
+// Optional audit logger
+let logEvent = async () => {};
 try {
-  const auditModule = require("../utils/auditLogger");
-  if (typeof auditModule?.logAuditEvent === "function") {
-    logAuditEvent = auditModule.logAuditEvent;
+  const logger = require("../utils/auditLogger");
+  if (typeof logger.logEvent === "function") {
+    logEvent = logger.logEvent;
   }
 } catch {}
 
 // ------------------------------------------------------------
-// Helpers
+// Extract Bearer token
 // ------------------------------------------------------------
 function extractToken(req) {
   const h = req.headers.authorization || req.headers.Authorization;
@@ -26,18 +24,20 @@ function extractToken(req) {
   return h.trim();
 }
 
-// Build permission map: { "patients:view": true, "billing:collect": true }
+// ------------------------------------------------------------
+// Build permission map: "patients:view"
+// ------------------------------------------------------------
 function buildPermissionMap(rows) {
   const map = {};
   for (const r of rows) {
-    const res = String(r.resource || "").trim();
-    const act = String(r.action || "").trim();
+    const res = String(r.resource || "").trim().toLowerCase();
+    const act = String(r.action || "").trim().toLowerCase();
     if (res && act) map[`${res}:${act}`] = true;
   }
   return map;
 }
 
-// Convert permission map into UI matrix
+// Convert permission map → matrix for UI
 function toMatrix(map) {
   const matrix = {};
   for (const key of Object.keys(map)) {
@@ -50,64 +50,77 @@ function toMatrix(map) {
 }
 
 // ------------------------------------------------------------
-// Load user + roles + permissions
+// ⭐ Hydrate full RBAC context (used by /api/auth/login AND /api/me)
 // ------------------------------------------------------------
 async function hydrateUserContext(userId) {
-  const userRes = await pool.query(
-    `SELECT u.id, u.full_name, u.email, u.role_id, u.profile_image_url, u.department
-     FROM users u
-     WHERE u.id = $1`,
+  const u = await pool.query(
+    `SELECT id, full_name, email, profile_image_url, role_id, department_id
+     FROM users WHERE id=$1`,
     [userId]
   );
 
-  if (!userRes.rows.length) return null;
-  const user = userRes.rows[0];
+  if (!u.rows.length) return null;
+  const user = u.rows[0];
 
-  // Load primary + secondary roles
-  const roleRes = await pool.query(
-    `SELECT r.id, r.name
-     FROM roles r
-     WHERE r.id = $1
-     UNION
-     SELECT r.id, r.name
-     FROM user_roles ur
-     JOIN roles r ON r.id = ur.role_id
-     WHERE ur.user_id = $2`,
+  // Load main + extra roles
+  const rolesResult = await pool.query(
+    `
+    SELECT r.id, r.name, r.slug
+    FROM roles r
+    WHERE r.id = $1
+    
+    UNION
+    
+    SELECT r.id, r.name, r.slug
+    FROM user_roles ur
+    JOIN roles r ON r.id = ur.role_id
+    WHERE ur.user_id = $2
+    `,
     [user.role_id, userId]
   );
 
-  const roles = roleRes.rows;
-  const roleIds = roles.map((r) => r.id);
-  const roleNames = roles.map((r) => r.name.toLowerCase());
+  const roleList = rolesResult.rows;
+  const roleIds = roleList.map((r) => r.id);
+  const roleNames = roleList.map((r) => r.name.toLowerCase());
+  const roleSlugs = roleList.map((r) => (r.slug || "").toLowerCase());
 
   // Load permissions
-  const permsRes = await pool.query(
-    `SELECT p.resource, p.action
-     FROM role_permissions rp
-     JOIN permissions p ON p.id = rp.permission_id
-     WHERE rp.role_id = ANY($1::int[])`,
+  const perms = await pool.query(
+    `
+    SELECT p.resource, p.action
+    FROM role_permissions rp
+    JOIN permissions p ON p.id = rp.permission_id
+    WHERE rp.role_id = ANY($1::int[])
+    `,
     [roleIds]
   );
 
-  const permission_map = buildPermissionMap(permsRes.rows);
+  const permission_map = buildPermissionMap(perms.rows);
 
-  // ✅ SUPERADMIN ALWAYS HAS FULL ACCESS
+  // SUPER ADMIN
   const isSuperAdmin =
-    roleNames.includes("superadmin") ||
+    roleIds.includes(1) ||
     roleNames.includes("super admin") ||
-    roleIds.includes(1);
+    roleSlugs.includes("super_admin");
 
   if (isSuperAdmin) {
     permission_map["*:*"] = true;
   }
+
+  const primaryRoleName = roleList[0]?.name || "";
 
   return {
     id: user.id,
     full_name: user.full_name,
     email: user.email,
     profile_image_url: user.profile_image_url,
-    department: user.department || null,
-    roles: roles.map((r) => r.name),
+    department: user.department_id || null,
+
+    role_id: user.role_id || null,
+    role_name: primaryRoleName,
+
+    roles: roleList.map((r) => r.name),
+    role_slugs: roleSlugs,
     role_ids: roleIds,
     permission_slugs: Object.keys(permission_map),
     permissions_map: permission_map,
@@ -124,63 +137,76 @@ const protect = async (req, res, next) => {
     if (!token) return res.status(401).json({ message: "No token provided" });
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
     const user = await hydrateUserContext(decoded.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
     req.user = user;
 
-    await logAuditEvent({
-      user_id: user.id,
-      action: "auth_protect",
-      resource: "auth",
-      description: `Token verified`,
+    await logEvent(req, {
+      module: "AUTH",
+      action: "TOKEN_VALID",
+      severity: "INFO",
+      details: { user_id: user.id },
     });
 
     next();
   } catch (err) {
-    console.error("Auth protect error:", err.message);
+    console.error("Protect error:", err.message);
+
+    await logEvent(req, {
+      module: "AUTH",
+      action: "TOKEN_INVALID",
+      severity: "WARNING",
+      details: { error: err.message },
+    });
+
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 };
 
 // ------------------------------------------------------------
-// authorize middleware (improved - case-insensitive, multi-resource support)
+// 🛡 authorize() — FULLY FIXED VERSION
 // ------------------------------------------------------------
 const authorize = (resources, action) => (req, res, next) => {
-  if (!req.user) return res.status(401).json({ message: "Unauthorized" });
+  if (!req.user)
+    return res.status(401).json({ message: "Unauthorized (no user)" });
 
-  // Normalize helper
-  const normalize = (v) =>
-    String(v || "")
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, "_");
-
-  // Build normalized permission set
-  const userPerms = new Set(
-    Object.keys(req.user.permissions_map || {}).map((k) => normalize(k))
+  const perms = new Set(
+    (req.user.permission_slugs || []).map((p) => p.toLowerCase())
   );
 
-  // Superadmin bypass
-  if (userPerms.has("*:*")) return next();
+  // SUPER ADMIN bypass
+  if (perms.has("*:*")) return next();
 
-  // Allow array or single resource
-  const resourceList = Array.isArray(resources) ? resources : [resources];
+  const norm = (v) => String(v || "").trim().toLowerCase();
 
-  // Build needed keys
-  const needed = resourceList.map(
-    (r) => `${normalize(r)}:${normalize(action)}`
-  );
+  let needed = [];
 
-  // Check for match
-  const allowed = needed.some((key) => userPerms.has(key));
+  // Case 1: Array of full permission strings (NO ACTION)
+  // authorize(["patients:view", "test_requests:view"])
+  if (Array.isArray(resources) && !action) {
+    needed = resources.map((r) => norm(r));
+  }
+
+  // Case 2: Classic authorize("tests","view")
+  else if (!Array.isArray(resources) && action) {
+    needed = [`${norm(resources)}:${norm(action)}`];
+  }
+
+  // Case 3: Array of resources + single action
+  // authorize(["patients","test_requests"], "view")
+  else if (Array.isArray(resources) && action) {
+    needed = resources.map((r) => `${norm(r)}:${norm(action)}`);
+  }
+
+  const allowed = needed.some((key) => perms.has(key));
 
   if (!allowed) {
     console.warn("🚫 Forbidden access", {
       user: req.user.email,
-      roles: req.user.roles,
       needed,
-      have: [...userPerms],
+      have: [...perms],
     });
     return res.status(403).json({ message: "Forbidden" });
   }
@@ -189,4 +215,8 @@ const authorize = (resources, action) => (req, res, next) => {
 };
 
 // ------------------------------------------------------------
-module.exports = { protect, authorize };
+module.exports = {
+  protect,
+  authorize,
+  hydrateUserContext,
+};

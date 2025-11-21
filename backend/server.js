@@ -1,5 +1,5 @@
 // ============================================================
-// 🚀 ELIMS Server Entry Point (Express 5 + Socket.IO + Docker)
+// 🚀 ELIMS Server Entry Point (FINAL PRODUCTION-STABLE VERSION)
 // ============================================================
 
 const express = require("express");
@@ -11,155 +11,139 @@ const morgan = require("morgan");
 const compression = require("compression");
 const helmet = require("helmet");
 const colors = require("colors");
-const jwt = require("jsonwebtoken");
 const { Server } = require("socket.io");
 
-// ------------------------------------------------------------
-// 🌱 Environment Config
-// ------------------------------------------------------------
+// ----------------------------------------------
+// Load .env (LOCAL DEV ONLY)
+// ----------------------------------------------
 if (process.env.NODE_ENV !== "production") {
-  console.log("🔧 Development mode: Loading .env file");
+  console.log("🔧 Development mode: Loading .env");
   dotenv.config();
-} else {
-  console.log("🏭 Production mode: Using container environment variables");
 }
 
-// ------------------------------------------------------------
-// 🧪 Critical Config Validation
-// ------------------------------------------------------------
+// ----------------------------------------------
+// Validate ENV
+// ----------------------------------------------
 if (!process.env.DATABASE_URL) {
-  console.error("❌ FATAL: DATABASE_URL is not defined".red.bold);
+  console.error("❌ DATABASE_URL missing");
   process.exit(1);
 }
 if (!process.env.JWT_SECRET) {
-  console.error("❌ FATAL: JWT_SECRET is not defined".red.bold);
+  console.error("❌ JWT_SECRET missing");
   process.exit(1);
 }
 
-// ------------------------------------------------------------
-// 🗄 Database Connection
-// ------------------------------------------------------------
+// DB
 const pool = require("./config/database");
 
-// ------------------------------------------------------------
-// 📊 Controllers (Dashboard)
-// ------------------------------------------------------------
-const dashboardController = require("./controllers/dashboardController");
+// Audit Auto Logger
+const { auditAutoLogger } = require("./middleware/auditAutoLogger");
 
-// ------------------------------------------------------------
-// 🔐 Auth Helpers
-// ------------------------------------------------------------
-const getTokenFromReq = (req) => {
-  const h = req.headers.authorization || "";
-  if (!h.toLowerCase().startsWith("bearer ")) return null;
-  return h.slice(7).trim();
-};
+// Standard protect middleware (already existing)
+const { protect } = require("./middleware/authMiddleware");
 
-const requireAuth = (req, res, next) => {
-  try {
-    const token = getTokenFromReq(req);
-    if (!token) return res.status(401).json({ message: "No token provided" });
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch {
-    res.status(401).json({ message: "Unauthorized" });
-  }
-};
-
-// ------------------------------------------------------------
-// 🌍 Express App Setup
-// ------------------------------------------------------------
+// ----------------------------------------------
+// Express App Init
+// ----------------------------------------------
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
+// ----------------------------------------------
+// Security headers
+// ----------------------------------------------
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
   })
 );
+
 app.use(compression());
 
-// Allow frontend URLs
-const allowedOrigins = (process.env.CORS_ORIGIN ||
-  "http://localhost:5173,http://localhost:8081")
+// ============================================================
+// 🔥 FINAL FIXED CORS BLOCK — WORKS FOR LOCAL + LAN + PROD
+// ============================================================
+const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
-  .map((s) => s.trim());
+  .map((x) => x.trim())
+  .filter((x) => x.length > 0);
+
+console.log("🌐 Allowed CORS Origins:", allowedOrigins);
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true); // allow mobile/curl
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      console.log("❌ CORS BLOCKED:", origin);
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
+// ----------------------------------------------
+// Body Parsers (must come BEFORE audit logger)
+// ----------------------------------------------
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+// ----------------------------------------------
+// Static Uploads
+// ----------------------------------------------
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-if (process.env.NODE_ENV !== "production") app.use(morgan("dev"));
+if (process.env.NODE_ENV !== "production") {
+  app.use(morgan("dev"));
+}
 
-// ------------------------------------------------------------
-// 🧪 Verify DB Connection Before Starting
-// ------------------------------------------------------------
+// ----------------------------------------------
+// DB Health Check
+// ----------------------------------------------
 (async () => {
   try {
     await pool.query("SELECT NOW()");
-    console.log("✅ Database connected successfully".green.bold);
+    console.log("✅ Database connected".green.bold);
   } catch (err) {
-    console.error("❌ Database connection failed:", err.message);
+    console.error("❌ DB connection failed:", err.message);
     process.exit(1);
   }
 })();
 
-// ------------------------------------------------------------
-// 🔌 Socket.IO Real-Time System
-// ------------------------------------------------------------
+// ----------------------------------------------
+// Socket.IO Setup
+// ----------------------------------------------
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: allowedOrigins, credentials: true },
-  pingTimeout: 20000,
-  pingInterval: 10000,
+  cors: {
+    origin: allowedOrigins,
+    credentials: true,
+  },
 });
 
-io.use((socket, next) => {
-  try {
-    const token = socket.handshake.auth?.token;
-    if (!token) return next(new Error("Unauthorized"));
+// ✅ FIX: make io available to socketEmitter.js via req.app.get("io")
+app.set("io", io);
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    socket.user = decoded;
-
-    socket.join(`user_${decoded.id}`);
-    socket.join("broadcast");
-
-    if (decoded.department) {
-      socket.join(`dept-${decoded.department.toLowerCase()}`);
-    }
-
-    next();
-  } catch {
-    next(new Error("Unauthorized"));
-  }
-});
-
-io.on("connection", (socket) => {
-  console.log(`🧩 Socket connected: ${socket.user?.full_name} (${socket.id})`);
-});
-
-// Make socket available in all controllers
+// Attach socket to req (you already had this)
 app.use((req, res, next) => {
   req.io = io;
   next();
 });
 
-// ------------------------------------------------------------
-// 🛣 Route Imports
-// ------------------------------------------------------------
+// ----------------------------------------------
+// Global Audit-Logger
+// ----------------------------------------------
+app.use(auditAutoLogger());
+
+// ----------------------------------------------
+// Route Imports
+// ----------------------------------------------
 const routes = {
   auth: require("./routes/authRoutes"),
   users: require("./routes/userRoutes"),
@@ -188,15 +172,19 @@ const routes = {
   instruments: require("./routes/instrumentsRoutes"),
   lis: require("./routes/lisRoutes"),
   me: require("./routes/meRoutes"),
-  public: require("./routes/publicRoutes"),
+  visits: require("./routes/visitRoutes"),
   messages: require("./routes/messageRoutes"),
-  notifications: require("./routes/notificationRoutes"), // 🆕
+  notifications: require("./routes/notificationRoutes"),
 };
 
-// ------------------------------------------------------------
-// 🚦 Register API Endpoints
-// ------------------------------------------------------------
+// ----------------------------------------------
+// Public Route
+// ----------------------------------------------
 app.use("/api/auth", routes.auth);
+
+// ----------------------------------------------
+// Protected Routes (their own files use protect)
+// ----------------------------------------------
 app.use("/api/users", routes.users);
 app.use("/api/patients", routes.patients);
 app.use("/api/test-catalog", routes.testCatalog);
@@ -223,40 +211,49 @@ app.use("/api/ingest-events", routes.ingestEvents);
 app.use("/api/instruments", routes.instruments);
 app.use("/api/lis", routes.lis);
 app.use("/api/me", routes.me);
-app.use("/api/visits", require("./routes/visitRoutes"));
+app.use("/api/visits", routes.visits);
 app.use("/api/messages", routes.messages);
 app.use("/api/notifications", routes.notifications);
+app.use("/api/reception", require("./routes/receptionRoutes"));
 
-// ------------------------------------------------------------
-// 📊 Dashboard Inline Routes
-// ------------------------------------------------------------
-app.get("/api/billing/dashboard-stats", requireAuth, dashboardController.getDashboardStats);
-app.get("/api/billing/analytics", requireAuth, dashboardController.getMonthlyAnalytics);
 
-// ------------------------------------------------------------
-// 💓 Health Check
-// ------------------------------------------------------------
-app.get("/", (req, res) => {
-  res.json({ ok: true, timestamp: new Date().toISOString() });
+// ----------------------------------------------
+// Dashboard Routes
+// ----------------------------------------------
+const dashboardController = require("./controllers/dashboardController");
+
+app.get(
+  "/api/billing/dashboard-stats",
+  protect,
+  dashboardController.getDashboardStats
+);
+
+app.get(
+  "/api/billing/analytics",
+  protect,
+  dashboardController.getMonthlyAnalytics
+);
+
+// ----------------------------------------------
+// 404 Handler
+// ----------------------------------------------
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: "Not Found" });
 });
 
-// ------------------------------------------------------------
-// ❌ 404 Not Found
-// ------------------------------------------------------------
-app.use((req, res) => res.status(404).json({ success: false, message: "Not found" }));
-
-// ------------------------------------------------------------
-// 💥 Global Error Handler
-// ------------------------------------------------------------
+// ----------------------------------------------
+// Global Error Handler
+// ----------------------------------------------
 app.use((err, req, res, next) => {
   console.error("💥 ERROR:", err.message);
   res.status(500).json({ success: false, message: err.message });
 });
 
-// ------------------------------------------------------------
-// 🚀 Start Server
-// ------------------------------------------------------------
+// ----------------------------------------------
+// Start Server
+// ----------------------------------------------
 const PORT = process.env.PORT || 5000;
+
 server.listen(PORT, "0.0.0.0", () =>
   console.log(`🌍 ELIMS API running on http://localhost:${PORT}`.cyan.bold)
 );

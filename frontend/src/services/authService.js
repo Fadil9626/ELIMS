@@ -1,32 +1,48 @@
-const API_URL = '/api/auth/';
+import apiFetch from "./apiFetch";
 
-// Login user
-const login = async (userData) => {
-  const config = {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(userData),
-  };
+const STORAGE_KEY = "elims_auth_v1";
 
-  const response = await fetch(`${API_URL}login`, config);
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.message || 'Failed to log in');
+// ----------------------
+// LOGIN
+// ----------------------
+// 🚀 FIXED: Accepts an object { email, password }
+async function login({ email, password }) {
+  if (!email || !password) {
+    throw new Error("Email and password are required");
   }
 
-  // If login is successful, save user info (including token) to local storage
-  if (data.token) {
-    localStorage.setItem('userInfo', JSON.stringify(data));
-  }
+  // 🚀 FIXED: Pass only the relative URL. apiFetch handles the base.
+  const response = await apiFetch("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
 
-  return data;
-};
+  // Store token + user structure AuthContext expects
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({ token: response.token, user: response.user })
+  );
 
-const authService = {
+  return response;
+}
+
+// ----------------------
+// GET CURRENT USER
+// ----------------------
+async function getMe() {
+  // 🚀 FIXED: Pass only the relative URL
+  return apiFetch("/api/auth/me");
+}
+
+// ----------------------
+// LOGOUT
+// ----------------------
+function logout() {
+  localStorage.removeItem(STORAGE_KEY);
+}
+
+export default {
   login,
+  logout,
+  getMe,
 };
-
-export default authService;

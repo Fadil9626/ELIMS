@@ -1,6 +1,5 @@
-// frontend/src/components/roles/RoleManager.jsx
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"; // 💡 FIX: Added useCallback
-import rolesService from "../../services/rolesService";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import apiFetch from "../../services/apiFetch";
 import AddEditRoleModal from "./AddEditRoleModal";
 import ConfirmModal from "../layout/ConfirmModal";
 import {
@@ -16,9 +15,6 @@ import {
   HiUpload,
   HiCheck,
   HiInformationCircle,
-  HiOutlineChevronLeft,
-  HiOutlineChevronRight,
-  HiX,
 } from "react-icons/hi";
 import toast from "react-hot-toast";
 
@@ -77,10 +73,9 @@ function markMatrixFromGrants(empty, granted /* array of {resource,action} */) {
 /** Normalize any backend response to a plain array of roles */
 function normalizeRoles(resp) {
   if (Array.isArray(resp)) return resp;
-  if (resp && Array.isArray(resp.items)) return resp.items; // controller shape
-  if (resp && Array.isArray(resp.rows)) return resp.rows;   // raw SQL shape
+  if (resp && Array.isArray(resp.items)) return resp.items; 
+  if (resp && Array.isArray(resp.rows)) return resp.rows;   
   if (resp && typeof resp === "object") {
-    // last resort: return the first array value found
     for (const v of Object.values(resp)) if (Array.isArray(v)) return v;
   }
   return [];
@@ -100,8 +95,8 @@ const RoleBadge = ({ core }) =>
 /* --------------------------------- component -------------------------------- */
 
 const RoleManager = () => {
-  const [roles, setRoles] = useState([]);             
-  const [catalog, setCatalog] = useState([]);         
+  const [roles, setRoles] = useState([]);         
+  const [catalog, setCatalog] = useState([]);       
   const [selectedRole, setSelectedRole] = useState(null);
 
   const [loading, setLoading] = useState(true);
@@ -120,11 +115,6 @@ const RoleManager = () => {
   const [matrix, setMatrix] = useState({});
   const [original, setOriginal] = useState({});
   const [emptyMatrix, setEmptyMatrix] = useState({});
-
-  const token = useMemo(() => {
-    const info = JSON.parse(localStorage.getItem("userInfo"));
-    return info?.token || null;
-  }, []);
 
   // System roles quick heuristics (adapt to your ids if needed)
   const isCore = (r) => r?.id <= 6;
@@ -147,14 +137,14 @@ const RoleManager = () => {
     setError(null);
     try {
       // 1) permissions catalog
-      const cat = await rolesService.getPermissionsCatalog(token);
+      const cat = await apiFetch("/api/roles/permissions");
       const safeCat = Array.isArray(cat) ? cat : [];
       setCatalog(safeCat);
       const empty = buildEmptyMatrix(safeCat);
       setEmptyMatrix(empty);
 
-      // 2) roles list (normalize any shape)
-      const raw = await rolesService.listRoles(token);
+      // 2) roles list
+      const raw = await apiFetch("/api/roles");
       const list = normalizeRoles(raw);
       setRoles(list);
 
@@ -168,7 +158,7 @@ const RoleManager = () => {
 
       // 3) selected role's grants -> matrix
       if (keep) {
-        const grants = await rolesService.getRolePermissions(keep.id, token); // [{resource,action}]
+        const grants = await apiFetch(`/api/roles/${keep.id}/permissions`); // [{resource,action}]
         const m = markMatrixFromGrants(empty, grants);
         setMatrix(m);
         setOriginal(cloneMatrix(m));
@@ -183,7 +173,7 @@ const RoleManager = () => {
     } finally {
       setLoading(false);
     }
-  }, [token, selectedRole?.id, emptyMatrix]);
+  }, [selectedRole?.id]);
 
   useEffect(() => {
     loadAll();
@@ -205,7 +195,7 @@ const RoleManager = () => {
     setOriginal(cloneMatrix(empty)); 
 
     try {
-      const grants = await rolesService.getRolePermissions(role.id, token); // array
+      const grants = await apiFetch(`/api/roles/${role.id}/permissions`); // array
       const m = markMatrixFromGrants(emptyMatrix, grants);
       setMatrix(m);
       setOriginal(cloneMatrix(m));
@@ -230,9 +220,9 @@ const RoleManager = () => {
   const saveRoleName = async (formData, roleId) => {
     try {
       if (roleId) {
-        await rolesService.updateRole(roleId, { name: formData.name }, token);
+        await apiFetch(`/api/roles/${roleId}`, { method: 'PUT', body: JSON.stringify({ name: formData.name }) });
       } else {
-        await rolesService.createRole({ name: formData.name }, token);
+        await apiFetch("/api/roles", { method: 'POST', body: JSON.stringify({ name: formData.name }) });
       }
       closeEdit();
       await loadAll();
@@ -244,7 +234,7 @@ const RoleManager = () => {
 
   const confirmDelete = async () => {
     try {
-      await rolesService.deleteRole(roleToDelete.id, token);
+      await apiFetch(`/api/roles/${roleToDelete.id}`, { method: 'DELETE' });
       setIsDeleteModalOpen(false);
       setRoleToDelete(null);
       await loadAll();
@@ -287,7 +277,10 @@ const RoleManager = () => {
     setSaving(true);
     try {
       const flat = flattenMatrix(matrix); // ["resource:action"]
-      await rolesService.setRolePermissions(selectedRole.id, flat, token);
+      await apiFetch(`/api/roles/${selectedRole.id}/permissions`, {
+        method: 'POST',
+        body: JSON.stringify({ permissions: flat }) // Send as object
+      });
       setOriginal(cloneMatrix(matrix));
       showNotification("success", "Permissions updated.");
     } catch (e) {
@@ -310,7 +303,7 @@ const RoleManager = () => {
     const r = (roles || []).find((x) => x.id === Number(id));
     if (!r) return;
     try {
-      const grants = await rolesService.getRolePermissions(r.id, token);
+      const grants = await apiFetch(`/api/roles/${r.id}/permissions`);
       const m = markMatrixFromGrants(emptyMatrix, grants);
       setMatrix(m);
       showNotification("success", `Copied permissions from ${r.name}—review and Save.`);
