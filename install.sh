@@ -18,7 +18,7 @@ DB_CONTAINER="elims_db"
 API_CONTAINER="elims_api"
 WEB_CONTAINER="elims_web"
 DB_USER="postgres"
-DB_NAME="postgres" # Default for the postgres image unless changed in compose
+DB_NAME="postgres" 
 PROJECT_ROOT=$(pwd)
 
 # --- ERROR HANDLING ---
@@ -44,7 +44,15 @@ echo "   🐳 STARTING ELIMS DOCKER INSTALLATION"
 echo "=================================================="
 echo -e "${NC}"
 
-# 1. FIND BACKUP FILE
+# 1. DETECT SERVER IP (For CORS)
+log "Detecting Server IP address..."
+SERVER_IP=$(hostname -I | awk '{print $1}')
+if [ -z "$SERVER_IP" ]; then
+    SERVER_IP="localhost"
+fi
+log "Detected IP: ${YELLOW}$SERVER_IP${NC}"
+
+# 2. FIND BACKUP FILE
 log "Looking for database backup..."
 SQL_DUMP=$(ls -t *.sql 2>/dev/null | head -n 1)
 if [ -z "$SQL_DUMP" ]; then
@@ -57,14 +65,16 @@ else
     warn "No .sql backup file found. Database will start empty."
 fi
 
-# 2. INSTALL DOCKER
+# 3. INSTALL DOCKER
 if ! command -v docker &> /dev/null; then
     log "Installing Docker..."
     apt-get update -q
     apt-get install -y -q ca-certificates curl gnupg
     install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    chmod a+r /etc/apt/keyrings/docker.gpg
+    if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+    fi
 
     echo \
       "deb [arch=\"$(dpkg --print-architecture)\" signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
@@ -78,40 +88,43 @@ else
     log "Docker is already installed."
 fi
 
-# 3. CONFIGURE ENVIRONMENT
+# 4. CONFIGURE ENVIRONMENT
 log "Configuring Environment Variables..."
 
 # Generate Backend .env if missing
 if [ ! -f "backend/.env" ]; then
     log "Creating backend/.env..."
     mkdir -p backend
+    # 🔑 CRITICAL: Add the Server IP to CORS_ORIGIN so remote access works
     cat > backend/.env <<EOF
 NODE_ENV=production
 PORT=5000
 # Connect to the 'db' service defined in docker-compose
 DATABASE_URL=postgresql://postgres:Database@db:5432/postgres
 JWT_SECRET=$(openssl rand -base64 32)
-CORS_ORIGIN=http://localhost:8081
+CORS_ORIGIN=http://localhost:8081,http://$SERVER_IP:8081,http://localhost:5173
 EOF
+    success "Generated backend/.env with CORS allowed for: $SERVER_IP"
 else
     warn "backend/.env already exists. Keeping existing config."
 fi
 
-# 4. START DOCKER CONTAINERS
+# 5. START DOCKER CONTAINERS
 log "Building and Starting Containers (This may take a while)..."
 # Using the 'prod' profile to launch db, api, and web services
 docker compose --profile prod up -d --build
 
-# 5. WAIT FOR DATABASE
+# 6. WAIT FOR DATABASE
 log "Waiting for Database to be ready..."
-until docker exec $DB_CONTAINER pg_isready -U $DB_USER; do
+# Loop until pg_isready returns 0 (success)
+until docker exec $DB_CONTAINER pg_isready -U $DB_USER > /dev/null 2>&1; do
   echo -n "."
   sleep 2
 done
 echo ""
 success "Database is ready."
 
-# 6. RESTORE DATABASE
+# 7. RESTORE DATABASE
 if [ -n "$SQL_DUMP" ]; then
     log "Restoring database from $SQL_DUMP..."
     
@@ -120,24 +133,22 @@ if [ -n "$SQL_DUMP" ]; then
     
     # Execute restore
     # We use || true to ignore errors if tables already exist (idempotency)
-    docker exec -i $DB_CONTAINER psql -U $DB_USER -d $DB_NAME -f /tmp/restore.sql || true
+    docker exec -i $DB_CONTAINER psql -U $DB_USER -d $DB_NAME -f /tmp/restore.sql > /dev/null 2>&1 || true
     
     success "Database restoration process completed."
 fi
 
-# 7. FINAL CHECK
+# 8. FINAL CHECK
 log "Checking container status..."
 docker compose --profile prod ps
-
-PUBLIC_IP=$(curl -s ifconfig.me || echo "localhost")
 
 echo ""
 echo -e "${GREEN}==================================================${NC}"
 echo -e "${GREEN}   ✅ INSTALLATION COMPLETE!${NC}"
 echo -e "${GREEN}==================================================${NC}"
 echo ""
-echo -e "1.  ${BLUE}Application URL:${NC} http://$PUBLIC_IP:8081"
-echo -e "2.  ${BLUE}API Endpoint:${NC}    http://$PUBLIC_IP:5000"
+echo -e "1.  ${BLUE}Application URL:${NC} http://$SERVER_IP:8081"
+echo -e "2.  ${BLUE}API Endpoint:${NC}    http://$SERVER_IP:5000"
 echo -e "3.  ${BLUE}Database:${NC}        Running in container '$DB_CONTAINER'"
 echo ""
 echo -e "👉 To view logs:  ${YELLOW}docker compose logs -f${NC}"

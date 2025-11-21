@@ -11,5 +11,5 @@ COPY . .
 
 EXPOSE 5000
 
-# Start the app
-CMD ["node", "index.js"]
+# 🔑 CRITICAL FIX: Point to server.js, not index.js
+CMD ["node", "server.js"]
