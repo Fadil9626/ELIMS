@@ -23,7 +23,7 @@ const getStoredToken = () => {
 
 /**
  * 🌐 Robust API fetch wrapper with clear error handling
- *    - Can use token passed in OR fall back to localStorage
+ * - Can use token passed in OR fall back to localStorage
  */
 async function apiFetch(url, options = {}, tokenArg) {
   // Prefer explicit token if provided, else from localStorage
@@ -90,6 +90,10 @@ const normalizePriorityForApi = (priority) => {
 const getAllTestRequests = (token) =>
   apiFetch(`${API_URL}/`, {}, token);
 
+/** 🚀 NEW: Get popular/frequent tests for Quick Access */
+const getPopularTests = (token) =>
+  apiFetch(`${API_URL}/stats/popular`, {}, token);
+
 /** Get one test request by ID */
 const getTestRequestById = (requestId, token) => {
   if (!requestId || requestId === "undefined")
@@ -106,25 +110,25 @@ const getTestRequestsByPatientId = (patientId, token) => {
   return apiFetch(`${API_URL}/patient/${patientId}`, {}, token);
 };
 
-/** Update workflow status */
+/** * 🔁 UPDATE Workflow Status (e.g. Release/Verify) 
+ * ⚠️ Backend: PATCH /:id/status
+ */
 const updateTestRequestStatus = (requestId, status, token) => {
   if (!requestId) throw new Error("requestId required");
   if (!status) throw new Error("status required");
 
   return apiFetch(
-    `${API_URL}/${requestId}`,
+    `${API_URL}/${requestId}/status`, 
     {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      method: "PATCH", // Changed from PUT to PATCH to match backend
       body: JSON.stringify({ status }),
     },
     token
   );
 };
 
-/** Create new test request (✅ sends priority to backend) */
+/** * ➕ Create new test request 
+ */
 const createTestRequest = async (requestData, token) => {
   const { patientId, testIds = [], priority } = requestData || {};
 
@@ -143,30 +147,66 @@ const createTestRequest = async (requestData, token) => {
 
   const normalizedPriority = normalizePriorityForApi(priority);
   if (normalizedPriority) {
-    payload.priority = normalizedPriority; // 🔴 this is what backend uses
+    payload.priority = normalizedPriority;
   }
 
-  console.log("📦 Sending Test Request Payload:", payload);
+  console.log("📦 Sending Create Payload:", payload);
 
-  try {
-    const result = await apiFetch(
-      `${API_URL}/`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      },
-      token
+  return apiFetch(
+    `${API_URL}/`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    token
+  );
+};
+
+/** * ✏️ UPDATE (Edit) Existing Request 
+ * ⚠️ Backend: PUT /:id
+ */
+const updateTestRequest = async (requestId, requestData, token) => {
+  const { testIds = [], priority } = requestData || {};
+  
+  if (!requestId) throw new Error("Request ID required");
+  if (!Array.isArray(testIds) || testIds.length === 0)
+    throw new Error("At least one test must be selected");
+
+  const normalizedTestIds = testIds
+    .map((id) => (typeof id === "object" ? Number(id.id) : Number(id)))
+    .filter(Boolean);
+
+  const payload = {
+    testIds: normalizedTestIds,
+  };
+
+  const normalizedPriority = normalizePriorityForApi(priority);
+  if (normalizedPriority) {
+    payload.priority = normalizedPriority;
+  }
+
+  console.log("📦 Sending Update Payload:", payload);
+
+  return apiFetch(
+    `${API_URL}/${requestId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+    token
+  );
+};
+
+/** * ❌ DELETE (Cancel) Request 
+ * ⚠️ Backend: DELETE /:id
+ */
+const deleteTestRequest = (requestId, token) => {
+    if (!requestId) throw new Error("requestId required");
+    return apiFetch(
+        `${API_URL}/${requestId}`, 
+        { method: "DELETE" }, 
+        token
     );
-
-    console.log("✅ Test request created:", result);
-    return result;
-  } catch (err) {
-    console.error("❌ createTestRequest error:", err.message);
-    throw new Error(err.message || "Failed to create test request");
-  }
 };
 
 /** Process payment */
@@ -180,22 +220,22 @@ const processPayment = (requestId, paymentData, token) => {
     `${API_URL}/${requestId}/payment`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify(paymentData),
     },
     token
   );
 };
 
-/** Fetch result entry template */
+/** * 🧬 Fetch Result Entry Template (Items to be filled)
+ * ⚠️ Backend: GET /:id/results
+ */
 const getResultEntryTemplate = async (requestId, token) => {
   if (!requestId) throw new Error("requestId required");
 
   try {
+    // Updated from /result-entry to /results to match backend
     const data = await apiFetch(
-      `${API_URL}/${requestId}/result-entry`,
+      `${API_URL}/${requestId}/results`, 
       {},
       token
     );
@@ -215,28 +255,25 @@ const saveResultEntry = (requestId, results, token) => {
     `${API_URL}/${requestId}/results`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify({ results }),
     },
     token
   );
 };
 
-/** Verify or reject results */
+/** * ✅ Verify or reject results 
+ * ⚠️ Backend: POST /:id/verify
+ */
 const verifyResults = (requestId, action, comment, token) => {
   if (!requestId) throw new Error("requestId required");
   if (!["verify", "reject"].includes(action))
     throw new Error("Action must be 'verify' or 'reject'");
 
+  // Updated from /verify-results to /verify to match backend
   return apiFetch(
-    `${API_URL}/${requestId}/verify-results`,
+    `${API_URL}/${requestId}/verify`, 
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify({ action, comment }),
     },
     token
@@ -248,10 +285,13 @@ const verifyResults = (requestId, action, comment, token) => {
  * =========================================================== */
 export default {
   getAllTestRequests,
+  getPopularTests,
   getTestRequestById,
   getTestRequestsByPatientId,
-  updateTestRequestStatus,
   createTestRequest,
+  updateTestRequest,       // 🚀 New
+  deleteTestRequest,       // 🚀 New
+  updateTestRequestStatus,
   processPayment,
   getResultEntryTemplate,
   saveResultEntry,

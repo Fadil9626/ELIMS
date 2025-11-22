@@ -5,7 +5,8 @@ import {
   FlaskConical,
   Building2,
   Activity,
-  BedDouble // ✅ Added Icon for Wards
+  BedDouble,
+  Beaker
 } from "lucide-react";
 import {
   Tabs,
@@ -17,19 +18,19 @@ import {
 // =============================================================
 // 📦 INDIVIDUAL CONFIGURATION TABS
 // =============================================================
+import TestsTab from "../tabs/TestsTab"; // ✅ Corrected Path
 import PanelsTab from "../tabs/PanelsTab";
 import AnalytesTab from "../tabs/AnalytesTab";
 import UnitsTab from "../tabs/UnitsTab";
 import SampleTypesTab from "../tabs/SampleTypesTab";
 import DepartmentsTab from "../tabs/DepartmentsTab";
-// ✅ New Import for the Wards Tab
 import WardsTab from "../tabs/WardsTab";
 
 // =============================================================
 // ⚙️ LAB CONFIG DASHBOARD
 // =============================================================
 const LabConfigDashboard: React.FC = () => {
-  const [activeTab, setActiveTab] = useState("panels");
+  const [activeTab, setActiveTab] = useState("tests");
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -39,7 +40,7 @@ const LabConfigDashboard: React.FC = () => {
           🧪 Laboratory Configuration
         </h1>
         <p className="text-gray-500 text-sm">
-          Manage your test panels, analytes, units, sample types, departments, and wards from a single control center.
+          Manage your individual tests, panels, analytes, units, sample types, departments, and wards.
         </p>
       </div>
 
@@ -47,13 +48,25 @@ const LabConfigDashboard: React.FC = () => {
       <Tabs
         value={activeTab}
         onValueChange={setActiveTab}
-        defaultValue="panels"
+        defaultValue="tests"
         className="space-y-6"
       >
         {/* ============================== */}
         {/* TAB NAVIGATION */}
         {/* ============================== */}
         <TabsList className="flex flex-wrap gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm w-fit">
+          
+          <TabsTrigger
+            value="tests"
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${
+              activeTab === "tests"
+                ? "bg-blue-600 text-white shadow-md"
+                : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+            }`}
+          >
+            <Beaker size={18} /> Tests
+          </TabsTrigger>
+
           <TabsTrigger
             value="panels"
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${
@@ -62,7 +75,7 @@ const LabConfigDashboard: React.FC = () => {
                 : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
             }`}
           >
-            <Layers size={18} /> Test Panels
+            <Layers size={18} /> Panels
           </TabsTrigger>
 
           <TabsTrigger
@@ -109,7 +122,6 @@ const LabConfigDashboard: React.FC = () => {
             <Building2 size={18} /> Departments
           </TabsTrigger>
 
-          {/* ✅ Wards Tab Trigger */}
           <TabsTrigger
             value="wards"
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${
@@ -126,6 +138,10 @@ const LabConfigDashboard: React.FC = () => {
         {/* TAB CONTENT */}
         {/* ============================== */}
         <div className="mt-6">
+          <TabsContent value="tests" className="outline-none">
+            <TestsTab />
+          </TabsContent>
+
           <TabsContent value="panels" className="outline-none">
             <PanelsTab />
           </TabsContent>
@@ -146,7 +162,6 @@ const LabConfigDashboard: React.FC = () => {
             <DepartmentsTab />
           </TabsContent>
           
-          {/* ✅ Wards Content */}
           <TabsContent value="wards" className="outline-none">
             <WardsTab />
           </TabsContent>

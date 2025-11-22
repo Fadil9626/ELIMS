@@ -10,14 +10,38 @@ import {
   Wand2,
   ShieldCheck,
   Save,
+  Beaker,
+  FileText
 } from "lucide-react";
 
 // ==================================================================================
-// 🔧 INTERNAL UTILITIES (Replaces missing imports)
+// 🛡️ UI FALLBACK OPTIONS
+// ==================================================================================
+const UI_OVERRIDES: Record<string, string[]> = {
+  "Urine Appearance": ["Clear", "Hazy", "Cloudy", "Turbid", "Bloody"],
+  "Urine Protein": ["Negative", "Trace", "Positive +", "Positive ++", "Positive +++"],
+  "Urine Glucose": ["Negative", "Trace", "Positive +", "Positive ++", "Positive +++"],
+  "Urine Ketones": ["Negative", "Trace", "Positive +", "Positive ++", "Positive +++"],
+  "Urine Blood": ["Negative", "Trace", "Positive +", "Positive ++", "Positive +++"],
+  "Urine Bilirubin": ["Negative", "Positive +", "Positive ++", "Positive +++"],
+  "Leucocytes": ["Negative", "Trace", "Positive +", "Positive ++", "Positive +++"],
+  "Nitrite": ["Negative", "Positive"],
+  "HCG (Pregnancy)": ["Negative", "Positive"],
+  "H. Pylori": ["Negative", "Positive"],
+  "VDRL / TPHA": ["Non-reactive", "Reactive"],
+  "HBsAg (Rapid)": ["Negative", "Positive"],
+  "HCV (Hepatitis C)": ["Negative", "Positive"],
+  "Rheumatoid Factor": ["Negative", "Positive"],
+  "C-Reactive Protein": ["Negative", "Positive"],
+  "Salmonella Typhi O": ["Neg", "1:80", "1:160", "1:320"],
+  "Salmonella Typhi H": ["Neg", "1:80", "1:160", "1:320"]
+};
+
+// ==================================================================================
+// 🔧 INTERNAL UTILITIES
 // ==================================================================================
 
-// 1. API Fetch Wrapper
-const apiFetch = async (url, options = {}) => {
+const apiFetch = async (url: string, options: any = {}) => {
   let token = "";
   try {
     const raw = localStorage.getItem("elims_auth_v1");
@@ -56,46 +80,26 @@ const apiFetch = async (url, options = {}) => {
   }
 };
 
-// 2. Pathologist Service (Internal Definition)
 const pathologistService = {
-  getResultTemplate: async (token, requestId) => {
-    const data = await apiFetch(`/api/pathologist/requests/${requestId}/template`);
-    // Normalize data
-    if (data && data.items) {
-        data.items = data.items.map((item) => ({
-          ...item,
-          unit_symbol: item.unit_symbol || item.unit_name || "",
-          type: item.type || 
-            ((item.ref_range || "").toLowerCase().match(/positive|negative|reactive/) 
-              ? "qualitative" : "quantitative"),
-          qualitative_values: (item.qualitative_values || []).filter(Boolean),
-        }));
-    }
-    return data;
+  getResultTemplate: async (token: string, requestId: string) => {
+    return apiFetch(`/api/pathologist/requests/${requestId}/template`);
   },
-  submitResult: async (token, testItemId, resultValue) => {
+  submitResult: async (token: string, testItemId: number, resultValue: string) => {
     return apiFetch(`/api/pathologist/items/${testItemId}/submit`, {
       method: "POST",
       body: JSON.stringify({ result: resultValue }),
     });
   },
-  verifyResult: async (token, testItemId) => {
+  verifyResult: async (token: string, testItemId: number) => {
     return apiFetch(`/api/pathologist/items/${testItemId}/verify`, {
       method: "POST",
       body: JSON.stringify({ action: "verify" }),
     });
-  },
-  updateRequestItemStatus: async (testItemId, status, token) => {
-    return apiFetch(`/api/pathologist/items/${testItemId}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
-    });
   }
 };
 
-// 3. Internal Auth Hook
 const useAuth = () => {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState<any>(null);
   const [token, setToken] = useState("");
 
   useEffect(() => {
@@ -114,38 +118,25 @@ const useAuth = () => {
   return { user, token };
 };
 
-// 4. Internal Socket Hook
-const useSocket = () => ({
-  socket: {
-    emit: () => {}, // Mock emit
-    on: () => {},
-    off: () => {}
-  }
-});
-
 // ============================================================
-// Result Entry Page Component (STRICT MODE)
+// Result Entry Page Component
 // ============================================================
 const ResultEntryPage = () => {
-  const { id } = useParams(); // requestId from route
+  const { id } = useParams(); 
   const navigate = useNavigate();
-  const { socket } = useSocket();
   const { token, user } = useAuth();
 
-  const [template, setTemplate] = useState({ request_id: 0, items: [] });
-  const [results, setResults] = useState({});
-  const [initialResults, setInitialResults] = useState({});
-  const [expandedGroups, setExpandedGroups] = useState({});
+  const [template, setTemplate] = useState<any>({ request_id: 0, items: [] });
+  const [results, setResults] = useState<any>({});
+  const [initialResults, setInitialResults] = useState<any>({});
+  const [expandedGroups, setExpandedGroups] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [verifying, setVerifying] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
 
   const userRole = user?.role_name?.toLowerCase() || "";
 
-  // ------------------------------------------------------------
-  // Load Template
-  // ------------------------------------------------------------
   const loadTemplate = useCallback(async () => {
     if (!token || !id) return;
 
@@ -159,41 +150,43 @@ const ResultEntryPage = () => {
         return res;
       }
 
+      const flatItems: any[] = [];
+      res.items.forEach((item: any) => {
+         flatItems.push(item);
+         if(item.is_panel && Array.isArray(item.analytes)) {
+             item.analytes.forEach((child: any) => {
+                 flatItems.push({
+                     ...child,
+                     department_name: item.department_name,
+                     panel_name: item.test_name
+                 });
+             });
+         }
+      });
+      
+      res.items = flatItems;
       setTemplate(res);
 
-      // Build initial values map
-      const initial = {};
-      res.items.forEach((t) => {
+      const initial: any = {};
+      res.items.forEach((t: any) => {
         if (t.request_item_id) {
           initial[`${t.request_item_id}_${t.test_id}`] = t.result_value || "";
-        }
-        if (t.is_panel && Array.isArray(t.analytes)) {
-          t.analytes.forEach((a) => {
-            if (a.request_item_id) {
-              initial[`${a.request_item_id}_${a.test_id}`] =
-                a.result_value || "";
-            }
-          });
         }
       });
 
       setResults(initial);
       setInitialResults(initial);
 
-      // Expand all departments by default
-      const expand = {};
-      res.items.forEach((t) => {
-        const group = t.department_name || "Unassigned";
+      const expand: any = {};
+      res.items.forEach((t: any) => {
+        const group = t.panel_name || t.department_name || "Unassigned";
         expand[group] = true;
       });
       setExpandedGroups(expand);
       setError(null);
-      return res;
-    } catch (e) {
+    } catch (e: any) {
       console.error("ResultEntry loadTemplate error:", e);
       setError(e?.message || "Failed to load data.");
-      setTemplate({ request_id: Number(id) || 0, items: [] });
-      return { items: [] };
     } finally {
       setLoading(false);
     }
@@ -203,31 +196,19 @@ const ResultEntryPage = () => {
     loadTemplate();
   }, [loadTemplate]);
 
-  // ------------------------------------------------------------
-  // Save All (STRICT, skip invalid IDs)
-  // ------------------------------------------------------------
   const handleSaveAll = async () => {
     try {
       setSaving(true);
-
-      // Build list of changed entries with valid numeric request_item_id
       const changed = Object.entries(results)
         .map(([k, v]) => {
-          const [reqItemId, testId] = k.split("_");
-          return { reqItemId, testId, result: v, key: k };
+          const [reqItemId] = k.split("_");
+          return { reqItemId, result: v, key: k };
         })
-        .filter((e) => {
-          // Must have a numeric request_item_id
-          if (!e.reqItemId || isNaN(Number(e.reqItemId))) {
-            return false;
-          }
+        .filter((e: any) => {
+          if (!e.reqItemId || isNaN(Number(e.reqItemId))) return false;
           const val = e.result;
-          // Only save if value is defined and different from initial load
           return (
-            val !== undefined &&
-            val !== null &&
-            String(val).trim() !== "" &&
-            val !== initialResults[e.key]
+            val !== undefined && val !== null && String(val).trim() !== "" && val !== initialResults[e.key]
           );
         });
 
@@ -236,334 +217,166 @@ const ResultEntryPage = () => {
         return;
       }
 
-      // Save each changed result
       for (const entry of changed) {
-        await pathologistService.submitResult(
-          token,
-          entry.reqItemId, // itemId (strict)
-          entry.result
-        );
+        await pathologistService.submitResult(token, entry.reqItemId, entry.result as string);
       }
 
       toast.success("Results saved.");
-
-      const updated = await loadTemplate();
-
-      // Auto-complete panels → Completed when all analytes have values
-      if (updated?.items?.length) {
-        for (const item of updated.items) {
-          if (
-            item.is_panel &&
-            Array.isArray(item.analytes) &&
-            item.status !== "Verified" &&
-            item.status !== "Released"
-          ) {
-            const allDone = item.analytes.every(
-              (a) =>
-                a.request_item_id &&
-                a.result_value &&
-                String(a.result_value).trim() !== ""
-            );
-
-            if (allDone && item.status !== "Completed") {
-              await pathologistService.updateRequestItemStatus(
-                item.request_item_id,
-                "Completed", // STRICT MODE
-                token
-              );
-              toast.success(`${item.test_name} marked Completed.`);
-            }
-          }
-        }
-      }
-
       await loadTemplate();
 
-      if (socket && socket.emit) {
-        socket.emit("result_saved", { request_id: template.request_id });
-        socket.emit("test_status_updated", { request_id: template.request_id });
-      }
-    } catch (e) {
-      console.error("SaveAll error:", e);
+    } catch (e: any) {
       toast.error(e?.message || "Save failed.");
     } finally {
       setSaving(false);
     }
   };
 
-  // ------------------------------------------------------------
-  // Verify All (STRICT MODE)
-  // ------------------------------------------------------------
   const handleVerifyAll = async () => {
-    // Allow pathologists, superadmins, or verify-permitted users
-    // Simple check here, but backend enforces strict permissions
     if (userRole === "lab technician") { 
-         toast.error("Technicians cannot verify results. Please ask a Pathologist.");
+         toast.error("Technicians cannot verify results.");
          return;
     }
-
     try {
       setVerifying(true);
-
-      // Only verify items that have a numeric id and a non-empty result
       const keys = Object.entries(results)
         .map(([k, v]) => {
           const [reqItemId] = k.split("_");
           return { reqItemId, result: v };
         })
-        .filter(
-          (e) =>
-            e.reqItemId &&
-            !isNaN(Number(e.reqItemId)) &&
-            e.result &&
-            String(e.result).trim() !== ""
-        );
+        .filter((e) => e.reqItemId && !isNaN(Number(e.reqItemId)) && e.result);
 
       if (keys.length === 0) {
-          toast.error("No results entered to verify.");
+          toast.error("No results entered.");
           return;
       }
 
       for (const entry of keys) {
-        await pathologistService.verifyResult(token, entry.reqItemId);
+        await pathologistService.verifyResult(token, Number(entry.reqItemId));
       }
-
       toast.success("Verified successfully.");
       await loadTemplate();
-
-      if (socket && socket.emit) {
-        socket.emit("test_status_updated", { request_id: template.request_id });
-      }
-    } catch (e) {
-      console.error("VerifyAll error:", e);
+    } catch (e: any) {
       toast.error(e?.message || "Verify failed.");
     } finally {
       setVerifying(false);
     }
   };
 
-  // ------------------------------------------------------------
-  // Quick Apply for Panels (qualitative)
-  // ------------------------------------------------------------
-  const handleQuickApplyNormal = (panel) => {
-    const updates = {};
-    panel.analytes.forEach((a) => {
-      if (
-        (a.type === "qualitative" || (a.qualitative_values && a.qualitative_values.length > 0)) &&
-        a.request_item_id
-      ) {
-        // Look for "Negative", "Non-Reactive", or "Normal"
-        const normal =
-          (a.qualitative_values || []).find((v) =>
-            /(negative|non-reactive|normal)/i.test(v)
-          ) || (a.qualitative_values || [])[0];
-        
-        if (normal) {
-             updates[`${a.request_item_id}_${a.test_id}`] = normal;
+  const handleQuickApplyNormal = (testsInGroup: any[]) => {
+    const updates: any = {};
+    testsInGroup.forEach((a) => {
+        if(a.is_panel) return; 
+
+        let options = a.qualitative_values || [];
+        if (!options.length && UI_OVERRIDES[a.test_name]) {
+            options = UI_OVERRIDES[a.test_name];
         }
-      }
+
+        // Skip text fields in quick apply
+        if (a.type === "quantitative" || a.test_name.includes("Microscopy")) return;
+
+        if (options.length > 0) {
+            const normal = options.find((v: string) => 
+                /(negative|non-reactive|normal|clear|yellow)/i.test(v)
+            ) || options[0];
+            
+            if (normal) {
+                updates[`${a.request_item_id}_${a.test_id}`] = normal;
+            }
+        }
     });
-    setResults((prev) => ({ ...prev, ...updates }));
-    toast.success(`Auto-filled normal results for ${panel.test_name}`);
+    setResults((prev: any) => ({ ...prev, ...updates }));
+    toast.success(`Auto-filled normal results.`);
   };
 
-  // ------------------------------------------------------------
-  // Flag Colors
-  // ------------------------------------------------------------
-  const getFlagColor = (flag) => {
-    switch (flag) {
-      case "H":
-        return "text-red-600 font-bold bg-red-50 px-2 py-0.5 rounded";
-      case "L":
-        return "text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded";
-      case "A":
-        return "text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded";
-      case "R":
-        return "text-red-700 font-bold bg-red-100 px-2 py-0.5 rounded";
-      case "N":
-        return "text-green-600 font-semibold";
-      default:
-        return "text-gray-400";
-    }
-  };
-
-  // ------------------------------------------------------------
-  // Loading / Error States
-  // ------------------------------------------------------------
-  if (!user) return <div className="p-6 text-center text-gray-500">Loading session...</div>;
-  if (loading && !template.items.length)
-    return <div className="p-6 text-center text-gray-500 animate-pulse">Loading template...</div>;
-
-  if (error)
-    return (
-      <div className="p-6 text-red-600 flex items-center gap-2 justify-center">
-        <AlertCircle className="w-5 h-5" /> {error}
-      </div>
-    );
-
-  // Group items by department
-  const grouped = template.items.reduce((acc, t) => {
-    const group = t.department_name || "Unassigned Department";
+  const grouped = template.items.reduce((acc: any, t: any) => {
+    const group = t.panel_name || t.department_name || "Unassigned Tests";
     if (!acc[group]) acc[group] = [];
     acc[group].push(t);
     return acc;
   }, {});
 
-  // ------------------------------------------------------------
-  // Render
-  // ------------------------------------------------------------
+  // ✅ SORTING LOGIC: Pushes 'Microscopy' to the bottom
+  Object.keys(grouped).forEach(group => {
+      grouped[group].sort((a: any, b: any) => {
+          const isAMicro = a.test_name.toLowerCase().includes("microscopy");
+          const isBMicro = b.test_name.toLowerCase().includes("microscopy");
+
+          if (isAMicro && !isBMicro) return 1; // A goes to bottom
+          if (!isAMicro && isBMicro) return -1; // B goes to bottom
+          return a.id - b.id; // Default sort by ID
+      });
+  });
+
+  if (loading && !template.items.length)
+    return <div className="p-6 text-center text-gray-500 animate-pulse">Loading template...</div>;
+
   return (
     <div className="p-6 bg-gray-50 min-h-screen max-w-5xl mx-auto">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Result Entry</h1>
           <p className="text-sm text-gray-500">Request #{template.request_id}</p>
         </div>
         <div className="flex gap-3">
-             <button
-                onClick={() => navigate(-1)}
-                className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-50 shadow-sm transition-colors"
-            >
+             <button onClick={() => navigate(-1)} className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-50 shadow-sm transition-colors">
                 <ArrowLeft className="w-4 h-4" /> Back
             </button>
         </div>
       </div>
 
-      {/* Table per Department */}
       <div className="space-y-6">
-        {Object.keys(grouped).length === 0 && (
-            <div className="text-center p-12 bg-white rounded-xl border border-dashed border-gray-300">
-                <p className="text-gray-500">No tests found in this request.</p>
-            </div>
-        )}
-
-        {Object.entries(grouped).map(([group, tests]) => (
-          <div key={group} className="bg-white shadow-sm border border-gray-200 rounded-xl overflow-hidden">
+        {Object.entries(grouped).map(([groupName, tests]: [string, any]) => (
+          <div key={groupName} className="bg-white shadow-sm border border-gray-200 rounded-xl overflow-hidden">
             <button
-              onClick={() =>
-                setExpandedGroups((prev) => ({
-                  ...prev,
-                  [group]: !prev[group],
-                }))
-              }
-              className="w-full flex justify-between items-center bg-gray-50 px-4 py-3 text-left"
+              onClick={() => setExpandedGroups((prev: any) => ({ ...prev, [groupName]: !prev[groupName] }))}
+              className="w-full flex justify-between items-center bg-blue-50/50 px-4 py-3 text-left border-b border-blue-100"
             >
-              <div className="flex items-center gap-2 font-semibold text-gray-800">
-                <ChevronDown
-                  className={`w-5 h-5 transition-transform text-gray-500 ${
-                    expandedGroups[group] ? "rotate-180" : ""
-                  }`}
-                />
-                {group}
-                <span className="bg-white border px-2 py-0.5 rounded-full text-xs text-gray-500 font-medium shadow-sm">
-                  {tests.length}
-                </span>
+              <div className="flex items-center gap-2 font-bold text-blue-900">
+                <Wand2 className="w-4 h-4 text-blue-600" />
+                {groupName}
+              </div>
+              <div className="flex items-center gap-3">
+                 <span className="text-xs bg-white text-blue-600 border border-blue-200 px-2 py-0.5 rounded-full">
+                    {tests.filter((t:any) => !t.is_panel).length} tests
+                 </span>
+                 <ChevronDown className={`w-4 h-4 text-blue-400 transition-transform ${expandedGroups[groupName] ? "rotate-180" : ""}`} />
               </div>
             </button>
 
             <AnimatePresence initial={false}>
-              {expandedGroups[group] && (
-                <motion.div
-                  key="table"
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-left">
-                        <thead className="bg-white border-b border-gray-100 text-gray-500 uppercase text-xs">
+              {expandedGroups[groupName] && (
+                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
+                   <div className="bg-white px-4 py-2 border-b border-gray-50 flex justify-end">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleQuickApplyNormal(tests); }}
+                        className="text-xs font-medium text-blue-600 hover:bg-blue-50 px-3 py-1.5 rounded transition-colors flex items-center gap-1"
+                      >
+                        <CheckCircle size={14} /> Quick Normal
+                      </button>
+                   </div>
+                   <table className="w-full text-sm text-left">
+                        <thead className="bg-gray-50 text-gray-500 uppercase text-xs">
                         <tr>
-                            <th className="px-4 py-3 w-[35%]">Test Name</th>
-                            <th className="px-4 py-3 w-[25%]">Result</th>
-                            <th className="px-4 py-3 w-[15%]">Unit</th>
-                            <th className="px-4 py-3 w-[15%]">Reference</th>
-                            <th className="px-4 py-3 w-[10%] text-center">Flag</th>
+                            <th className="px-4 py-3 w-[40%]">Test Name</th>
+                            <th className="px-4 py-3 w-[30%]">Result</th>
+                            <th className="px-4 py-3 w-[10%]">Unit</th>
+                            <th className="px-4 py-3 w-[20%] text-right">Reference</th>
                         </tr>
                         </thead>
-
                         <tbody className="divide-y divide-gray-100">
-                        {tests.map((t) => (
-                            <Fragment key={t.request_item_id || `${t.test_id}-panel`}>
-                            {t.is_panel ? (
-                                <>
-                                {/* Panel Header Row */}
-                                <tr className="bg-blue-50/30">
-                                    <td
-                                    colSpan={5}
-                                    className="px-4 py-2 font-semibold text-blue-900 flex justify-between items-center"
-                                    >
-                                    <span className="flex items-center gap-2">
-                                        <Wand2 className="w-4 h-4 text-blue-500" /> {t.test_name}
-                                    </span>
-                                    {Array.isArray(t.analytes) &&
-                                        t.analytes.some(
-                                        (a) =>
-                                            (a.type === "qualitative" || a.qualitative_values?.length > 0)
-                                        ) && (
-                                        <button
-                                            onClick={() => handleQuickApplyNormal(t)}
-                                            className="text-xs bg-white border border-blue-200 text-blue-600 hover:bg-blue-50 px-2 py-1 rounded shadow-sm transition-colors"
-                                        >
-                                            Quick Normal
-                                        </button>
-                                        )}
-                                    </td>
-                                </tr>
-
-                                {/* Panel Analytes */}
-                                {Array.isArray(t.analytes) &&
-                                    t.analytes.map((a) => (
-                                    <ResultRow
-                                        key={
-                                        a.request_item_id
-                                            ? `${a.request_item_id}_${a.test_id}`
-                                            : `noid_${a.test_id}`
-                                        }
-                                        test={{
-                                        ...a,
-                                        test_name: a.test_name, // Indent handled in component or CSS
-                                        is_analyte: true
-                                        }}
-                                        value={
-                                        a.request_item_id
-                                            ? results[
-                                                `${a.request_item_id}_${a.test_id}`
-                                            ] || ""
-                                            : ""
-                                        }
-                                        onChange={(k, v) =>
-                                        setResults((prev) => ({
-                                            ...prev,
-                                            [k]: v,
-                                        }))
-                                        }
-                                        getFlagColor={getFlagColor}
-                                    />
-                                    ))}
-                                </>
-                            ) : (
-                                <ResultRow
+                        {tests.map((t: any) => (
+                            <ResultRow
+                                key={t.request_item_id || t.test_id}
                                 test={t}
-                                value={
-                                    t.request_item_id
-                                    ? results[
-                                        `${t.request_item_id}_${t.test_id}`
-                                        ] || ""
-                                    : ""
+                                value={results[`${t.request_item_id}_${t.test_id}`] || ""}
+                                onChange={(val: string) =>
+                                    setResults((prev: any) => ({ ...prev, [`${t.request_item_id}_${t.test_id}`]: val }))
                                 }
-                                onChange={(k, v) =>
-                                    setResults((prev) => ({ ...prev, [k]: v }))
-                                }
-                                getFlagColor={getFlagColor}
-                                />
-                            )}
-                            </Fragment>
+                            />
                         ))}
                         </tbody>
-                    </table>
-                  </div>
+                   </table>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -571,113 +384,121 @@ const ResultEntryPage = () => {
         ))}
       </div>
 
-      {/* Footer Actions */}
-      <div className="sticky bottom-0 bg-white border-t border-gray-200 p-4 -mx-6 mt-6 shadow-lg flex flex-col sm:flex-row justify-between items-center gap-4">
-        <div className="flex items-center gap-2 text-sm text-gray-600">
-          <CheckCircle className="text-green-600 w-5 h-5" />
-          <span>
-            Save results first, then verify.
-          </span>
-        </div>
-
-        <div className="flex gap-3 w-full sm:w-auto">
-          {["pathologist", "superadmin", "admin"].includes(userRole) && (
-            <button
-              onClick={handleVerifyAll}
-              disabled={verifying || saving}
-              className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 px-5 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 shadow-sm transition-colors font-medium"
-            >
-              {verifying ? (
-                  <span className="animate-pulse">Verifying...</span>
-              ) : (
-                  <>
-                    <ShieldCheck className="w-4 h-4" /> Verify All
-                  </>
-              )}
-            </button>
-          )}
-
-          <button
-            onClick={handleSaveAll}
-            disabled={saving || verifying}
-            className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white py-2.5 px-6 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 shadow-sm transition-colors font-medium"
-          >
-            {saving ? (
-                <span className="animate-pulse">Saving...</span>
-            ) : (
-                <>
-                    <Save className="w-4 h-4" /> Save All
-                </>
-            )}
+      <div className="sticky bottom-0 bg-white border-t border-gray-200 p-4 -mx-6 mt-6 shadow-lg flex justify-end gap-3 z-10">
+         <button onClick={handleSaveAll} disabled={saving} className="bg-blue-600 hover:bg-blue-700 text-white py-2.5 px-6 rounded-lg flex items-center gap-2 disabled:opacity-50 font-medium shadow-sm transition-all active:scale-95">
+            {saving ? <span className="animate-pulse">Saving...</span> : <><Save className="w-4 h-4" /> Save Results</>}
           </button>
-        </div>
+          <button onClick={handleVerifyAll} disabled={verifying} className="bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 px-6 rounded-lg flex items-center gap-2 disabled:opacity-50 font-medium shadow-sm transition-all active:scale-95">
+            {verifying ? <span className="animate-pulse">Verifying...</span> : <><ShieldCheck className="w-4 h-4" /> Verify All</>}
+          </button>
       </div>
     </div>
   );
 };
 
 // ============================================================
-// Row Component
+// 🧱 Row Component
 // ============================================================
-const ResultRow = ({ test, value, onChange, getFlagColor }) => {
-  const hasId = !!test.request_item_id && !isNaN(Number(test.request_item_id));
-  const key = hasId
-    ? `${test.request_item_id}_${test.test_id}`
-    : `noid_${test.test_id}`;
+const ResultRow = ({ test, value, onChange }: any) => {
+  if (test.is_panel) {
+     return (
+        <tr className="bg-blue-50/20">
+           <td colSpan={4} className="px-4 py-2 font-bold text-blue-800 text-xs uppercase tracking-wider border-t border-blue-100">
+               {test.test_name}
+           </td>
+        </tr>
+     );
+  }
+
+  const isLocked = ["Verified", "Released"].includes(test.status);
   
-  // Lock if verified/released unless reopening is implemented in row actions
-  const lockedByStatus = ["Verified", "Released"].includes(test.status);
-  const editable = hasId && !lockedByStatus;
+  // --- OPTIONS LOGIC ---
+  let options = test.qualitative_values || [];
+  if (!options.length && UI_OVERRIDES[test.test_name]) {
+     options = UI_OVERRIDES[test.test_name];
+  }
+  if (typeof test.qualitative_value === 'string' && test.qualitative_value.startsWith('{')) {
+      options = test.qualitative_value.replace(/^\{|\}$/g, '').split(',');
+  }
+  options = options.map((o: string) => o.replace(/"/g, '').trim());
 
-  const commonInputClasses = editable
-    ? "border rounded-lg px-3 py-2 w-full border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-shadow"
-    : "border rounded-lg px-3 py-2 w-full bg-gray-50 text-gray-500 cursor-not-allowed border-gray-200";
+  // --- TYPE LOGIC (Strict enforcement) ---
+  const isQuantitative = test.type === 'quantitative';
+  
+  // ✅ FORCE TEXT FOR THESE FIELDS
+  const forceText = [
+      "Urine Color", 
+      "Urobilinogen",
+      "Specific Gravity",
+      "pH"
+  ].some(key => test.test_name.includes(key));
 
-  // Detect qualitative type
-  const isQualitative = 
-    test.type === "qualitative" || 
-    (test.qualitative_values && test.qualitative_values.length > 0);
+  // ✅ FORCE TEXT AREA FOR MICROSCOPY
+  const isTextArea = test.test_name.toLowerCase().includes("microscopy");
+
+  const showDropdown = !isQuantitative && !forceText && !isTextArea && options.length > 0;
+
+  const getColorClass = (val: string) => {
+      if(!val) return "text-gray-900";
+      if(/positive|reactive|\+\+/i.test(val)) return "text-red-600 font-bold";
+      if(/trace/i.test(val)) return "text-orange-600 font-medium";
+      return "text-green-700 font-medium";
+  };
 
   return (
     <tr className="hover:bg-gray-50 transition-colors group">
-      <td className={`px-4 py-3 font-medium text-gray-800 ${test.is_analyte ? "pl-8" : ""}`}>
+      <td className="px-4 py-3 font-medium text-gray-800">
         <div className="flex items-center gap-2">
-            {test.is_analyte && <span className="w-1.5 h-1.5 rounded-full bg-gray-300"></span>}
+             <span className="w-1.5 h-1.5 rounded-full bg-gray-300"></span>
             {test.test_name}
-            {!hasId && (
-            <span className="text-[10px] text-red-500 bg-red-50 px-1.5 py-0.5 rounded border border-red-100">
-                Error: No ID
-            </span>
-            )}
         </div>
       </td>
 
       <td className="px-4 py-3">
-        {isQualitative ? (
-          <select
-            value={value}
-            onChange={(e) => editable && onChange(key, e.target.value)}
-            disabled={!editable}
-            className={`${commonInputClasses} appearance-none`}
-          >
-            <option value="">Select...</option>
-            {(test.qualitative_values?.length
-              ? test.qualitative_values
-              : ["Positive", "Negative", "Reactive", "Non-Reactive"]
-            ).map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
+        {showDropdown ? (
+          <div className="relative">
+              <select
+                value={value}
+                onChange={(e) => !isLocked && onChange(e.target.value)}
+                disabled={isLocked}
+                className={`w-full p-2.5 border rounded-lg outline-none bg-white appearance-none transition-shadow cursor-pointer 
+                    ${isLocked ? 'bg-gray-100 text-gray-500' : 'focus:ring-2 focus:ring-blue-500 border-gray-300'}
+                    ${getColorClass(value)}
+                `}
+              >
+                <option value="">Select Result...</option>
+                {options.map((opt: string) => (
+                  <option key={opt} value={opt} className="text-gray-900 font-normal">
+                    {opt}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 pointer-events-none" />
+          </div>
+        ) : isTextArea ? (
+           <div className="relative">
+               <FileText className="absolute top-3 left-3 w-4 h-4 text-gray-400 pointer-events-none" />
+               <textarea
+                 value={value}
+                 onChange={(e) => !isLocked && onChange(e.target.value)}
+                 readOnly={isLocked}
+                 rows={3} // Taller box
+                 className={`w-full p-2.5 pl-9 border rounded-lg outline-none transition-shadow resize-y
+                    ${isLocked ? 'bg-gray-100 text-gray-500' : 'focus:ring-2 focus:ring-blue-500 border-gray-300'}
+                 `}
+                 placeholder="Type microscopy findings..."
+               />
+           </div>
         ) : (
           <input
-            type="text" // text to allow "< 5.0" inputs if needed, else use number
+            type="text"
             value={value}
-            onChange={(e) => editable && onChange(key, e.target.value)}
-            readOnly={!editable}
-            className={commonInputClasses}
-            placeholder="Enter value"
+            onChange={(e) => !isLocked && onChange(e.target.value)}
+            readOnly={isLocked}
+            className={`w-full p-2.5 border rounded-lg outline-none transition-shadow
+                ${isLocked ? 'bg-gray-100 text-gray-500' : 'focus:ring-2 focus:ring-blue-500 border-gray-300'}
+            `}
+            placeholder="Enter value..."
           />
         )}
       </td>
@@ -686,16 +507,8 @@ const ResultRow = ({ test, value, onChange, getFlagColor }) => {
         {test.unit_symbol || "—"}
       </td>
       
-      <td className="px-4 py-3 text-gray-500 text-xs">
+      <td className="px-4 py-3 text-right text-gray-400 text-xs">
         {test.ref_range || "—"}
-      </td>
-      
-      <td className="px-4 py-3 text-center">
-        {test.flag && (
-            <span className={`text-xs ${getFlagColor(test.flag)}`}>
-                {test.flag}
-            </span>
-        )}
       </td>
     </tr>
   );

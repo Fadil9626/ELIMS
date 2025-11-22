@@ -1,20 +1,10 @@
-// src/pages/tests/TestRequestDetailPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import testRequestService from "../../services/testRequestService";
-import { Clock, CheckCircle, XCircle, FileText, DollarSign, ArrowLeft, Users, Beaker, Layers, TrendingUp, TrendingDown, Minus } from "lucide-react"; // Added new icons
+import { Clock, CheckCircle, XCircle, FileText, DollarSign, ArrowLeft, Users, Beaker, Layers, AlertTriangle, Minus } from "lucide-react";
 import useCan from "../../hooks/useCan";
 
-// --- Helpers (Unchanged) ---
-function getToken() {
-  try {
-    const ls = JSON.parse(localStorage.getItem("userInfo") || "null") || {};
-    return ls?.token || ls?.user?.token || null;
-  } catch {
-    return null;
-  }
-}
-
+// --- Helpers ---
 function safeNumber(n, fallback = 0) {
   const v = Number(n);
   return Number.isFinite(v) ? v : fallback;
@@ -22,11 +12,10 @@ function safeNumber(n, fallback = 0) {
 
 function formatLe(amount) {
   const num = safeNumber(amount, 0);
-  // Ensure consistent 2 decimal places for currency
   return `${num.toLocaleString(undefined, { minimumFractionDigits: 2 })} Le`; 
 }
 
-/** Attempt to read a human-ish value out of various result_data shapes (Unchanged) */
+/** Attempt to read a human-ish value out of various result_data shapes */
 function resultCell(result_data) {
   if (result_data == null) return "Pending / N/A";
 
@@ -62,11 +51,9 @@ function resultCell(result_data) {
 
   return "Pending / N/A";
 }
-// --- Helpers End ---
 
 /**
  * 🎨 Helper Component for Status Badges
- * Added to enhance visual status reporting
  */
 const StatusBadge = ({ status }) => {
     const normalizedStatus = (status || 'N/A').toLowerCase();
@@ -130,21 +117,16 @@ const TestRequestDetailPage = () => {
             try {
                 setLoading(true);
                 setError(null);
-                const token = getToken();
-                if (!token) {
-                    setError("Your session expired. Please log in again.");
-                    setLoading(false);
-                    return;
-                }
-                const data = await testRequestService.getTestRequestById(requestId, token);
+                
+                // ✅ FIX: Removed manual token check. apiFetch handles auth automatically.
+                // We don't pass a token here; the service layer will pull it from elims_auth_v1.
+                const data = await testRequestService.getTestRequestById(requestId);
 
                 if (!cancelled) setRequest(data);
             } catch (err) {
                 if (!cancelled) {
                     // Check if the error message is the specific bug message
                     if (err?.message?.includes("No linked test request found")) {
-                       // The backend API is likely returning the wrong error or is misconfigured.
-                       // Use the generic 404 message for the user.
                        setError("Request not found, or patient link is broken.");
                     } else {
                        setError(err?.message || "Failed to load test request.");
@@ -162,15 +144,14 @@ const TestRequestDetailPage = () => {
 
     const totalPrice = useMemo(() => {
         if (!request?.items?.length) return 0;
-        // Use the total from the request header if available, otherwise recalculate
         return safeNumber(request.payment_amount) || request.items.reduce((sum, item) => sum + safeNumber(item.price, 0), 0);
     }, [request]);
 
     if (loading) return <div className="p-6 text-blue-600 font-semibold flex items-center gap-2"><Clock size={20} className="animate-spin"/> Loading request details...</div>;
     if (error)
         return (
-            <div className="p-6 bg-red-50 border border-red-300 rounded-lg text-red-700 space-y-4 shadow-md">
-                <div className="font-bold text-lg">⚠️ Error Loading Request:</div>
+            <div className="p-6 bg-red-50 border border-red-300 rounded-lg text-red-700 space-y-4 shadow-md m-4">
+                <div className="font-bold text-lg flex items-center gap-2"><AlertTriangle size={20} /> Error Loading Request</div>
                 <div className="space-y-2">
                    <p>{error}</p>
                    <p className="text-sm text-red-500">Please verify the Request ID and your network connection.</p>
@@ -193,26 +174,32 @@ const TestRequestDetailPage = () => {
         );
     if (!request) return <div className="p-6 text-gray-600">Request not found.</div>;
 
-    const patientName = [request.first_name, request.last_name] // Use first_name/last_name from controller JOIN
+    const patientName = [request.first_name, request.last_name]
         .filter(Boolean)
         .join(" ");
     
     const requestDate = request.created_at ? new Date(request.created_at).toLocaleDateString() : 'N/A';
+    const isUrgent = request.priority === 'URGENT';
     
     return (
         <div className="p-6 max-w-6xl mx-auto">
             {/* Header and Actions Bar */}
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 pb-3 border-b border-gray-200">
-                <h1 className="text-3xl font-extrabold text-gray-900 flex items-center gap-2">
-                    <FileText size={28} className="text-blue-600" />
-                    Request #{request.id}
-                </h1>
+            <div className={`flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 pb-3 border-b border-gray-200 ${isUrgent ? 'border-l-4 border-l-red-500 pl-4' : ''}`}>
+                <div className="flex items-center gap-3">
+                    <h1 className="text-3xl font-extrabold text-gray-900 flex items-center gap-2">
+                        <FileText size={28} className="text-blue-600" />
+                        Request #{request.id}
+                    </h1>
+                    {isUrgent && (
+                        <span className="flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold uppercase rounded-full animate-pulse border border-red-200">
+                            <AlertTriangle size={12} /> Urgent
+                        </span>
+                    )}
+                </div>
 
                 <div className="flex flex-wrap items-center gap-3">
-                    {/* Status Badge */}
                     <StatusBadge status={request.status} />
 
-                    {/* Quick actions */}
                     {can("reports", "view") && requestId && (
                         <Link
                             to={`/reports/test-request/${requestId}`}
@@ -296,7 +283,6 @@ const TestRequestDetailPage = () => {
                                     let resultClass = 'text-gray-800';
                                     let ResultIcon = Minus;
 
-                                    // Simple logic to highlight results (can be extended with ref ranges)
                                     if (resultValue.includes('Pending') || resultValue.includes('N/A')) {
                                         resultClass = 'text-gray-500 italic';
                                         ResultIcon = Clock;

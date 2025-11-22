@@ -7,6 +7,8 @@ const {
   getAnalytes,
   createAnalyte,
   updateAnalyte,
+  deleteAnalyte,    // ✅ Added
+  toggleTestStatus, // ✅ Added
 
   // 🧩 Panels
   getPanels,
@@ -48,6 +50,9 @@ const {
 
   // Wards
   getWards,
+  createWard, // ✅ Added
+  updateWard, // ✅ Added
+  deleteWard, // ✅ Added
 } = require("../controllers/labConfigController");
 
 const MODULE = "settings";
@@ -85,19 +90,28 @@ router.delete("/units/:id", authorize(MODULE, "edit"), deleteUnit);
 // 🏨 Wards
 // ✅ FIX: Removed authorize()
 router.get("/wards", getWards);
+router.post("/wards", authorize(MODULE, "edit"), createWard);
+router.put("/wards/:id", authorize(MODULE, "edit"), updateWard);
+router.delete("/wards/:id", authorize(MODULE, "edit"), deleteWard);
 
 // ============================================================
 // 🧪 TESTS / ANALYTES
 // ============================================================
 
-// 📋 Full test list (includes analytes + panels)
-// ✅ FIX: Removed authorize() so "New Request" form can load tests
-router.get("/tests/all", getAllTests);
+// 📋 Full test list (Analytes + Panels)
+// ✅ FIX: Changed from /tests/all to /tests to match Service File
+router.get("/tests", getAllTests); 
 
-// 🔬 Analytes only
-router.get("/tests", authorize(MODULE, "view"), getAnalytes); // Keeping restricted as this is usually for config view
+// 🔬 Analytes only (Optional filter endpoint)
+router.get("/analytes", authorize(MODULE, "view"), getAnalytes); 
+
+// CRUD for Tests
 router.post("/tests", authorize(MODULE, "edit"), createAnalyte);
 router.put("/tests/:id", authorize(MODULE, "edit"), updateAnalyte);
+router.delete("/tests/:id", authorize(MODULE, "edit"), deleteAnalyte); // ✅ Added Delete route
+
+// Toggle Active Status
+router.patch("/tests/:id/status", authorize(MODULE, "edit"), toggleTestStatus); // ✅ Added Toggle route
 
 // ============================================================
 // 🧩 PANELS
@@ -106,6 +120,8 @@ router.put("/tests/:id", authorize(MODULE, "edit"), updateAnalyte);
 router.get("/panels", authorize(MODULE, "view"), getPanels);
 router.post("/panels", authorize(MODULE, "edit"), createPanel);
 router.put("/panels/:id", authorize(MODULE, "edit"), updatePanel);
+// Note: Delete panel is usually handled via deleteAnalyte if ID is passed, 
+// but you can add specific deletePanel route if your controller separates them.
 
 // 🔗 Panel–Analyte Linking
 router.get("/panels/:id/analytes", authorize(MODULE, "view"), getPanelAnalytes);

@@ -1,4 +1,3 @@
-// frontend/src/App.tsx
 import React, { useContext } from "react";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import "./assets/styles/index.css";
@@ -31,6 +30,7 @@ import PhlebotomyWorklistPage from "./pages/phlebotomy/PhlebotomyWorklistPage";
 import InventoryPage from "./pages/inventory/InventoryPage";
 
 import SettingsPage from "./pages/admin/SettingsPage";
+import BillingSettingsPage from "./pages/admin/BillingSettingsPage"; // ✅ ADDED THIS IMPORT
 import LabConfigDashboard from "./pages/admin/labconfig/LabConfigDashboard";
 import TestCatalogManager from "./pages/admin/TestCatalogManager";
 import StaffManagementPage from "./pages/admin/StaffManagementPage";
@@ -109,7 +109,7 @@ const AppLayout: React.FC = () => {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
-            {/* ROOT DASHBOARD ROUTER (after login / base url) */}
+            {/* ROOT DASHBOARD ROUTER */}
             <Route
               path="/"
               element={
@@ -119,7 +119,6 @@ const AppLayout: React.FC = () => {
               }
             />
 
-            {/* SIDEBAR DASHBOARD ENTRY */}
             <Route
               path="/dashboard"
               element={
@@ -190,7 +189,9 @@ const AppLayout: React.FC = () => {
               path="/patients/:id"
               element={
                 <ProtectedRoute>
-                  <PatientDetailPage />
+                  <RequirePermission module="patients" action="view">
+                    <PatientDetailPage />
+                  </RequirePermission>
                 </ProtectedRoute>
               }
             />
@@ -199,7 +200,9 @@ const AppLayout: React.FC = () => {
               path="/patients/:id/edit"
               element={
                 <ProtectedRoute>
-                  <EditPatientPage />
+                  <RequirePermission module="patients" action="update">
+                    <EditPatientPage />
+                  </RequirePermission>
                 </ProtectedRoute>
               }
             />
@@ -219,6 +222,28 @@ const AppLayout: React.FC = () => {
               element={
                 <ProtectedRoute>
                   <TestManagementPage />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/tests/requests/new"
+              element={
+                <ProtectedRoute>
+                  <RequirePermission module="test_requests" action="create">
+                    <RequestTestPage />
+                  </RequirePermission>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/tests/requests/:id/edit"
+              element={
+                <ProtectedRoute>
+                  <RequirePermission module="test_requests" action="update">
+                    <RequestTestPage />
+                  </RequirePermission>
                 </ProtectedRoute>
               }
             />
@@ -289,12 +314,14 @@ const AppLayout: React.FC = () => {
               }
             />
 
-            {/* STAFF & ADMIN CONFIG */}
+            {/* ADMIN CONFIG */}
             <Route
               path="/admin/staff"
               element={
                 <ProtectedRoute>
-                  <StaffManagementPage />
+                  <RequirePermission module="staff" action="manage">
+                    <StaffManagementPage />
+                  </RequirePermission>
                 </ProtectedRoute>
               }
             />
@@ -303,7 +330,22 @@ const AppLayout: React.FC = () => {
               path="/admin/settings"
               element={
                 <ProtectedRoute>
-                  <SettingsPage />
+                  <RequirePermission module="admin" action="view">
+                    <SettingsPage />
+                  </RequirePermission>
+                </ProtectedRoute>
+              }
+            />
+
+            {/* ✅ ADDED: BILLING SETTINGS ROUTE */}
+            <Route
+              path="/admin/billing-settings"
+              element={
+                <ProtectedRoute>
+                  {/* Using 'admin' permission, but you can change module to 'billing' if you have specific roles */}
+                  <RequirePermission module="admin" action="view">
+                    <BillingSettingsPage />
+                  </RequirePermission>
                 </ProtectedRoute>
               }
             />
@@ -312,7 +354,9 @@ const AppLayout: React.FC = () => {
               path="/admin/lab-config"
               element={
                 <ProtectedRoute>
-                  <LabConfigDashboard />
+                  <RequirePermission module="lab_config" action="view">
+                    <LabConfigDashboard />
+                  </RequirePermission>
                 </ProtectedRoute>
               }
             />
@@ -321,7 +365,9 @@ const AppLayout: React.FC = () => {
               path="/admin/lab-config/catalog"
               element={
                 <ProtectedRoute>
-                  <TestCatalogManager />
+                  <RequirePermission module="test_catalog" action="manage">
+                    <TestCatalogManager />
+                  </RequirePermission>
                 </ProtectedRoute>
               }
             />
@@ -350,7 +396,9 @@ const AppLayout: React.FC = () => {
               path="/invoices/test-request/:id"
               element={
                 <ProtectedRoute>
-                  <InvoicePage />
+                  <RequirePermission module="billing" action="view">
+                    <InvoicePage />
+                  </RequirePermission>
                 </ProtectedRoute>
               }
             />

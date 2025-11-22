@@ -175,6 +175,8 @@ const routes = {
   visits: require("./routes/visitRoutes"),
   messages: require("./routes/messageRoutes"),
   notifications: require("./routes/notificationRoutes"),
+  // ➕ NEW: Medical Records Route
+  medicalRecords: require("./routes/medicalRecordsRoutes"),
 };
 
 // ----------------------------------------------
@@ -214,6 +216,9 @@ app.use("/api/me", routes.me);
 app.use("/api/visits", routes.visits);
 app.use("/api/messages", routes.messages);
 app.use("/api/notifications", routes.notifications);
+// ➕ NEW: Wire up the route
+app.use("/api/medical-records", routes.medicalRecords);
+
 app.use("/api/reception", require("./routes/receptionRoutes"));
 
 

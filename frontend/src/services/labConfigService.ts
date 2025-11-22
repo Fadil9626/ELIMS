@@ -1,5 +1,5 @@
 // ============================================================================
-// 🧪 LAB CONFIG SERVICE (Full Service Logic from TS, converted to JS)
+// 🧪 LAB CONFIG SERVICE (Fixed & Optimized)
 // ============================================================================
 
 // -----------------------------
@@ -28,10 +28,8 @@ const apiCall = async (
     try {
       error = await response.json();
     } catch (e) {
-      // If JSON parsing fails, throw a generic HTTP error
       throw new Error(`API Error ${response.status}: Failed to parse error response.`);
     }
-    // Throw the specific error message provided by the backend
     throw new Error(error.message || error.error || `Request failed with status ${response.status}`);
   }
 
@@ -70,36 +68,43 @@ const updatePanel = async (id, data, token) =>
 const deletePanel = async (id, token) =>
   apiCall(`${PANEL_API_URL}/${id}`, "DELETE", token);
 
-// --- Compatibility alias for older frontend components ---
+// --- Compatibility aliases ---
 const getTestPanels = getPanels;
 const updateTestPanel = updatePanel;
 const deleteTestPanel = deletePanel;
 const createTestPanel = createPanel;
 
 // ============================================================================
-// 🧬 ANALYTES / TESTS (Reduced for brevity, using full logic)
+// 🧬 ANALYTES / TESTS
 // ============================================================================
-const getAnalytes = async (token) =>
+
+// ✅ FIX 1: Removed '/all'. Backend listens at /api/lab-config/tests
+const getAllTests = async (token) =>
   apiCall(`${ANALYTE_API_URL}`, "GET", token);
 
-const getAllTests = async (token) =>
-  apiCall(`${ANALYTE_API_URL}/all`, "GET", token);
+const getAnalytes = getAllTests; // Alias
 
-const updateAnalyte = async (id, data, token) =>
-  apiCall(`${ANALYTE_API_URL}/${id}`, "PUT", token, data);
-
-const createAnalyte = async (data, token) =>
+const createTest = async (data, token) =>
   apiCall(ANALYTE_API_URL, "POST", token, data);
 
-const deleteAnalyte = async (id, token) =>
+const updateTest = async (id, data, token) =>
+  apiCall(`${ANALYTE_API_URL}/${id}`, "PUT", token, data);
+
+const deleteTest = async (id, token) =>
   apiCall(`${ANALYTE_API_URL}/${id}`, "DELETE", token);
-  
-// --- Legacy aliases for UI compatibility ---
+
+// ✅ FIX 2: Added missing function required by TestsTab.tsx
+const toggleTestStatus = async (id, isActive, token) =>
+  apiCall(`${ANALYTE_API_URL}/${id}/status`, "PATCH", token, { is_active: isActive });
+
+// --- Legacy aliases ---
+const createAnalyte = createTest;
+const updateAnalyte = updateTest;
+const deleteAnalyte = deleteTest;
 const getAllCatalogTests = getAllTests;
-const updateTest = updateAnalyte; 
 
 // ============================================================================
-// 🔗 PANEL ANALYTE LINKS (Reduced for brevity, using full logic)
+// 🔗 PANEL ANALYTE LINKS
 // ============================================================================
 const getAnalytesForPanel = async (panelId, token) =>
   apiCall(`${PANEL_API_URL}/${panelId}/analytes`, "GET", token);
@@ -111,28 +116,19 @@ const removeAnalyteFromPanel = async (panelId, analyteId, token) =>
   apiCall(`${PANEL_API_URL}/${panelId}/analytes/${analyteId}`, "DELETE", token);
 
 // ============================================================================
-// 📏 UNITS
+// 📏 UNITS & CONFIGS
 // ============================================================================
 const getUnits = async (token) =>
   apiCall(UNIT_API_URL, "GET", token);
 
-// ============================================================================
-// 🏥 DEPARTMENTS / SAMPLE TYPES / WARDS
-// ============================================================================
 const getDepartments = async (token) =>
   apiCall(DEPARTMENT_API_URL, "GET", token);
 
 const getSampleTypes = async (token) =>
   apiCall(SAMPLE_TYPE_API_URL, "GET", token);
 
-// 🚀 WARDS: This is the critical function using the clean API helper
 const getWards = async (token) =>
   apiCall(WARD_API_URL, "GET", token);
-
-
-// You would need to define createWard, updateWard, deleteWard here as well, 
-// using the same WARD_API_URL and apiCall structure. 
-// Assuming they are already correctly defined in the full JS service based on previous steps:
 
 const createWard = async (data, token) =>
   apiCall(WARD_API_URL, "POST", token, data);
@@ -143,18 +139,14 @@ const updateWard = async (id, data, token) =>
 const deleteWard = async (id, token) =>
   apiCall(`${WARD_API_URL}/${id}`, "DELETE", token);
 
-
 // ============================================================================
-// 🧠 NORMAL RANGES (Reduced for brevity, using full logic)
+// 🧠 NORMAL RANGES
 // ============================================================================
 const getNormalRanges = async (analyteId, token) =>
   apiCall(`${ANALYTE_API_URL}/${analyteId}/ranges`, "GET", token);
 
-const createNormalRange = async (
-  analyteId,
-  data,
-  token
-) => apiCall(`${ANALYTE_API_URL}/${analyteId}/ranges`, "POST", token, data);
+const createNormalRange = async (analyteId, data, token) => 
+  apiCall(`${ANALYTE_API_URL}/${analyteId}/ranges`, "POST", token, data);
 
 const updateNormalRange = async (rangeId, data, token) =>
   apiCall(`/api/lab-config/ranges/${rangeId}`, "PUT", token, data);
@@ -177,26 +169,29 @@ const labConfigService = {
   deleteTestPanel,
 
   // Tests / Analytes
-  getAnalytes,
   getAllTests,
+  getAnalytes,
   getAllCatalogTests,
+  createTest,
   createAnalyte,
+  updateTest,
   updateAnalyte,
-  updateTest, 
+  deleteTest,
   deleteAnalyte,
+  toggleTestStatus, // <--- Now exported
 
   // Panel–Analyte Links
   getAnalytesForPanel,
   addAnalyteToPanel,
   removeAnalyteFromPanel,
 
-  // Units / Config tables
+  // Config tables
   getUnits,
   getDepartments,
   getSampleTypes,
-  getWards, // <--- This function should now successfully call your backend
-
-  // Ward CUD
+  
+  // Wards
+  getWards,
   createWard,
   updateWard,
   deleteWard,

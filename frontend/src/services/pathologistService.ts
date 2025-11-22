@@ -3,6 +3,27 @@ import apiFetch from "./apiFetch";
 const API_URL = "/api/pathologist";
 const REQUEST_API = "/api/test-requests";
 
+// 🛡️ SAFETY NET: Default options if DB returns nothing
+const FALLBACK_OPTIONS = {
+  "Urine Color": ["Yellow", "Pale Yellow", "Amber", "Red", "Brown", "Other"],
+  "Urine Appearance": ["Clear", "Hazy", "Cloudy", "Turbid", "Bloody"],
+  "Urine Protein": ["Negative", "Trace", "Positive +", "Positive ++", "Positive +++"],
+  "Urine Glucose": ["Negative", "Trace", "Positive +", "Positive ++", "Positive +++"],
+  "Urine Ketones": ["Negative", "Trace", "Positive +", "Positive ++", "Positive +++"],
+  "Urine Blood": ["Negative", "Trace", "Positive +", "Positive ++", "Positive +++"],
+  "Urine Bilirubin": ["Negative", "Positive +", "Positive ++", "Positive +++"],
+  "Leucocytes": ["Negative", "Trace", "Positive +", "Positive ++", "Positive +++"],
+  "Nitrite": ["Negative", "Positive"],
+  "Urobilinogen": ["Normal", "0.1", "1.0", "4.0", "8.0", "12.0"],
+  "HCG (Pregnancy)": ["Negative", "Positive"],
+  "H. Pylori": ["Negative", "Positive"],
+  "VDRL / TPHA": ["Non-reactive", "Reactive"],
+  "HBsAg (Rapid)": ["Negative", "Positive"],
+  "HCV (Hepatitis C)": ["Negative", "Positive"],
+  "Rheumatoid Factor": ["Negative", "Positive"],
+  "C-Reactive Protein": ["Negative", "Positive"]
+};
+
 // =============================================================
 // 📋 Worklist & Filters
 // =============================================================
@@ -27,24 +48,70 @@ export const getStatusCounts = async (token) => {
 // 🧩 Enhanced Result Entry (The "Template")
 // =============================================================
 export const getResultTemplate = async (token, requestId) => {
-  // 🚀 UPDATE: Points to the main Test Request controller to get 
-  // the Department-Filtered view we built.
-  const data = await apiFetch(`${REQUEST_API}/${requestId}/results`, { 
+  // 1. Fetch Data
+  const data = await apiFetch(`${API_URL}/requests/${requestId}/template`, { 
     headers: { Authorization: `Bearer ${token}` } 
   });
 
-  // Normalize qualitative & quantitative items for the UI
-  if (data && data.items) {
-    data.items = data.items.map((item) => ({
+  // 2. Helper: Parse Options from DB or Fallback
+  const resolveOptions = (item) => {
+    let options = [];
+    const rawVal = item.qualitative_value || item.qualitative_values;
+
+    // A. Try Parsing from DB
+    if (Array.isArray(rawVal) && rawVal.length > 0) {
+        options = rawVal;
+    } else if (typeof rawVal === 'string') {
+        if (rawVal.startsWith('{')) {
+            options = rawVal.replace(/^\{|\}$/g, '').split(',').map(s => s.replace(/^"|"$/g, '').trim());
+        } else if (rawVal.includes(';')) {
+            options = rawVal.split(';').map(s => s.trim());
+        }
+    }
+
+    // B. If DB failed, check Fallback Dictionary
+    if (options.length === 0 && FALLBACK_OPTIONS[item.test_name]) {
+        options = FALLBACK_OPTIONS[item.test_name];
+    }
+
+    return options;
+  };
+
+  // 3. Helper: Process Item
+  const processItem = (item) => {
+    const options = resolveOptions(item);
+
+    return {
       ...item,
       unit_symbol: item.unit_symbol || item.unit_name || "",
-      type:
-        item.type ||
-        ((item.ref_range || "").toLowerCase().match(/positive|negative|reactive/i)
-          ? "qualitative"
-          : "quantitative"),
-      qualitative_values: (item.qualitative_values || []).filter(Boolean),
-    }));
+      // 🚀 FORCE QUALITATIVE IF OPTIONS EXIST
+      type: options.length > 0 ? "qualitative" : (item.type || "quantitative"),
+      qualitative_values: options.filter(Boolean),
+    };
+  };
+
+  // 4. Normalize & Flatten Data for UI
+  if (data && data.items) {
+    const flatList = [];
+    
+    data.items.forEach((item) => {
+        // Process the parent item
+        const processedParent = processItem(item);
+        flatList.push(processedParent);
+
+        // If it has nested analytes (children), extract them too
+        if (item.is_panel && Array.isArray(item.analytes)) {
+            item.analytes.forEach((child) => {
+                const processedChild = processItem({
+                    ...child,
+                    department_name: item.department_name,
+                    panel_name: item.test_name 
+                });
+                flatList.push(processedChild);
+            });
+        }
+    });
+    data.items = flatList;
   }
 
   return data;
@@ -94,14 +161,10 @@ export const markForReview = async (token, testItemId) => {
 };
 
 // =============================================================
-// 🔁 Update Request Status (Main Request Header)
+// 🔁 Update Request Status
 // =============================================================
 export const updateRequestStatus = async (requestId, newStatus, token) => {
-  if (!requestId || !newStatus) {
-    throw new Error("Missing requestId or status");
-  }
-  // 🚀 UPDATE: Fixed method to PATCH and added /status endpoint
-  // This matches: router.patch("/:id/status", ...)
+  if (!requestId || !newStatus) throw new Error("Missing ID or status");
   return apiFetch(`${REQUEST_API}/${requestId}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status: newStatus }),
@@ -109,12 +172,7 @@ export const updateRequestStatus = async (requestId, newStatus, token) => {
   });
 };
 
-// =============================================================
-// 🧾 Release Report
-// =============================================================
 export const releaseReport = async (token, requestId) => {
-  // 🚀 UPDATE: Uses the standard status update endpoint 
-  // to leverage the "Restricted Status" logic in testRequestController.
   return updateRequestStatus(requestId, "Released", token);
 };
 
@@ -149,13 +207,8 @@ export const adoptAnalyzerResults = async (token, testItemId, options = {}) => {
   });
 };
 
-// =============================================================
-// 🆕 Update Individual Test Item Status
-// =============================================================
 export const updateRequestItemStatus = async (testItemId, newStatus, token) => {
-  if (!testItemId || !newStatus) {
-    throw new Error("Missing testItemId or status");
-  }
+  if (!testItemId || !newStatus) throw new Error("Missing ID or status");
   return apiFetch(`${API_URL}/items/${testItemId}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status: newStatus }),
@@ -163,9 +216,6 @@ export const updateRequestItemStatus = async (testItemId, newStatus, token) => {
   });
 };
 
-// =============================================================
-// 🧠 Export Default
-// =============================================================
 const pathologistService = {
   getWorklist,
   getResults,

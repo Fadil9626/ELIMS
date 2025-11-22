@@ -5,7 +5,6 @@ const { logAuditEvent } = require('../utils/auditLogger');
  * SQL SANITIZER – removes non-breaking / zero-width spaces
  * -------------------------------------------------------- */
 function sanitizeSQL(sql) {
-  // Replace BOM, NBSP, zero-width joiners, etc. with normal spaces
   return sql.replace(/[\uFEFF\u00A0\u200B\u200C\u200D]/g, ' ');
 }
 
@@ -18,7 +17,6 @@ async function runQuery(sql, params = []) {
 /** ===========================================================
  * MRN Generator (NOW ATOMIC)
  * ========================================================== */
-// Accepts client for atomic update within a transaction.
 const generateMRN = async (client) => {
   const sql = sanitizeSQL(`
     UPDATE mrn_settings 
@@ -48,11 +46,9 @@ const ensureNumericId = (id) => {
 
 /**
  * Normalize admission type to DB Enum
- * DB Expects: 'OPD', 'IPD', 'Emergency'
  */
 const normalizeAdmissionType = (type) => {
   if (!type) return 'OPD';
-
   const lower = String(type).toLowerCase().trim();
   if (lower === 'inpatient' || lower === 'ipd') return 'IPD';
   if (lower === 'emergency') return 'Emergency';
@@ -82,7 +78,7 @@ const registerPatient = async (req, res) => {
     emergencyPhone,
     is_confidential = false,
     restricted_doctor_id = null,
-    priority = 'ROUTINE', // currently not stored in DB
+    priority = 'ROUTINE',
   } = req.body;
 
   const registeredBy = req.user.id;
@@ -166,15 +162,15 @@ const registerPatient = async (req, res) => {
       emergencyRelationship || null,
       emergencyPhone || null,
       registeredBy,
-      contactPhone || null,      // phone
-      contactAddress || null,    // address
+      contactPhone || null,
+      contactAddress || null,
       is_confidential,
       restricted_doctor_id || null,
     ]);
 
     const patient = inserted.rows[0];
 
-    // Generate Lab ID (e.g., YYYYMM-PatientID)
+    // Generate Lab ID
     const now = new Date();
     const labId = `${now.getFullYear()}${String(
       now.getMonth() + 1
@@ -224,7 +220,7 @@ const getAllPatients = async (req, res) => {
         p.contact_email,
         p.admission_type,
         w.name AS ward_name,
-        'ROUTINE' AS priority,  -- temp default until column exists
+        'ROUTINE' AS priority,
         p.is_confidential,
         p.restricted_doctor_id,
         tr.id AS latest_request_id,
@@ -245,7 +241,6 @@ const getAllPatients = async (req, res) => {
     `);
 
     const result = await pool.query(sql);
-
     return res.status(200).json(result.rows);
   } catch (err) {
     console.error('❌ GetAllPatients Error:', err.message);
@@ -286,35 +281,60 @@ const getPatientById = async (req, res) => {
 };
 
 /** ===========================================================
- * UPDATE PATIENT
+ * UPDATE PATIENT (Corrected for Payload Mismatch)
  * ========================================================== */
 const updatePatient = async (req, res) => {
   const { id } = req.params;
 
+  // 1. Destructure inputs handling both camelCase (Legacy) and snake_case (Frontend)
   const {
-    firstName,
-    middleName,
-    lastName,
-    dateOfBirth,
+    firstName, first_name,
+    middleName, middle_name,
+    lastName, last_name,
+    dateOfBirth, date_of_birth,
     gender,
-    maritalStatus,
+    maritalStatus, marital_status,
     occupation,
-    contactPhone,
-    contactAddress,
-    contactEmail,
-    admissionType,
-    wardId,
-    referringDoctor,
-    emergencyName,
-    emergencyRelationship,
-    emergencyPhone,
-    is_confidential = false,
-    restricted_doctor_id = null,
+    contactPhone, contact_phone,
+    contactAddress, contact_address,
+    contactEmail, contact_email,
+    admissionType, admission_type,
+    wardId, ward_id,
+    referringDoctor, referring_doctor,
+    emergencyName, emergency_name,
+    emergencyRelationship, emergency_relationship,
+    emergencyPhone, emergency_phone,
+    is_confidential,
+    restricted_doctor_id,
   } = req.body;
 
   try {
     const numericId = ensureNumericId(id);
-    const normalizedAdmissionType = normalizeAdmissionType(admissionType);
+
+    // 2. Normalize values (Prefer snake_case if available, else camelCase)
+    const fName = first_name || firstName;
+    const lName = last_name || lastName;
+    const dob = date_of_birth || dateOfBirth;
+    const mName = middle_name || middleName || null;
+    const sex = gender || null;
+    const mStatus = marital_status || maritalStatus || null;
+    const job = occupation || null;
+    const phone = contact_phone || contactPhone || null;
+    const address = contact_address || contactAddress || null;
+    const email = contact_email || contactEmail || null;
+    const admType = normalizeAdmissionType(admission_type || admissionType);
+    const wId = ward_id || wardId || null;
+    const refDoc = referring_doctor || referringDoctor || null;
+    const eName = emergency_name || emergencyName || null;
+    const eRel = emergency_relationship || emergencyRelationship || null;
+    const ePhone = emergency_phone || emergencyPhone || null;
+    const isConfidential = is_confidential || false;
+    const restrictedDocId = restricted_doctor_id || null;
+
+    // 3. Validation
+    if (!fName || !lName) {
+      return res.status(400).json({ message: "First Name and Last Name are required" });
+    }
 
     const sql = sanitizeSQL(`
       UPDATE patients SET
@@ -335,30 +355,31 @@ const updatePatient = async (req, res) => {
         emergency_phone = $15,
         referring_doctor = $16,
         is_confidential = $17,
-        restricted_doctor_id = $18
+        restricted_doctor_id = $18,
+        updated_at = NOW()
       WHERE id = $19
       RETURNING *
     `);
 
     const result = await pool.query(sql, [
-      firstName,
-      middleName || null,
-      lastName,
-      dateOfBirth,
-      gender || null,
-      maritalStatus || null,
-      occupation || null,
-      contactPhone || null,
-      contactAddress || null,
-      contactEmail || null,
-      normalizedAdmissionType,
-      wardId || null,
-      emergencyName || null,
-      emergencyRelationship || null,
-      emergencyPhone || null,
-      referringDoctor || null,
-      is_confidential,
-      restricted_doctor_id || null,
+      fName,
+      mName,
+      lName,
+      dob,
+      sex,
+      mStatus,
+      job,
+      phone,
+      address,
+      email,
+      admType,
+      wId,
+      eName,
+      eRel,
+      ePhone,
+      refDoc,
+      isConfidential,
+      restrictedDocId,
       numericId,
     ]);
 

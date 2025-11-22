@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+// Ensure this matches your actual controller filename (singular vs plural)
 const testRequestController = require("../controllers/testRequestController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 
@@ -25,6 +26,16 @@ router.param("patientId", (req, res, next, patientId) => {
 // ============================================================
 // 🧪 Test Request Routes
 // ============================================================
+
+// 🔹 ⚡ NEW: Get Popular Tests (Quick Access)
+// ⚠️ MUST be defined BEFORE /:id to prevent "stats" being treated as an ID
+router.get(
+  "/stats/popular",
+  protect,
+  // Open to anyone who can create tests (Reception, Admin, etc.)
+  authorize(["test_requests:create", "test_requests:view"]), 
+  testRequestController.getPopularTests
+);
 
 // 🔹 List all requests
 router.get(
@@ -56,6 +67,24 @@ router.get(
   protect,
   authorize(["test_requests:view", "tests:view"]),
   testRequestController.getTestRequestById
+);
+
+// 🔹 🚀 NEW: Update Request (Edit Order)
+// Allows adding/removing tests if status is still Pending
+router.put(
+  "/:id",
+  protect,
+  authorize(["test_requests:update", "tests:update"]),
+  testRequestController.updateTestRequest
+);
+
+// 🔹 🚀 NEW: Delete Request (Cancel Order)
+// Only allowed if status is Pending
+router.delete(
+  "/:id",
+  protect,
+  authorize(["test_requests:delete", "tests:delete"]),
+  testRequestController.deleteTestRequest
 );
 
 // 🔹 Update request status (Verified / Released)

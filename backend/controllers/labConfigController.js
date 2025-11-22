@@ -21,7 +21,7 @@ const ensureSchema = async () => {
   if (schemaInitialized) return;
 
   try {
-    // --- Core columns on test_catalog
+    // --- Core columns on test_catalog (✅ FIXED: Added description column)
     await pool.query(`
       ALTER TABLE test_catalog
         ADD COLUMN IF NOT EXISTS is_panel BOOLEAN NOT NULL DEFAULT FALSE,
@@ -30,14 +30,18 @@ const ensureSchema = async () => {
         ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
         ADD COLUMN IF NOT EXISTS sample_type_id INTEGER REFERENCES sample_types(id) ON DELETE SET NULL,
         ADD COLUMN IF NOT EXISTS unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS test_type TEXT DEFAULT 'quantitative',
+        ADD COLUMN IF NOT EXISTS qualitative_value TEXT,
+        ADD COLUMN IF NOT EXISTS description TEXT, -- ✅ Added this line
         ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
     `);
 
-    // --- Panel auto-recalc toggle
+    // --- Panel auto-recalc & Dynamic Price toggles
     await pool.query(`
       ALTER TABLE test_catalog
-        ADD COLUMN IF NOT EXISTS panel_auto_recalc BOOLEAN NOT NULL DEFAULT FALSE
+        ADD COLUMN IF NOT EXISTS panel_auto_recalc BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS price_is_dynamic BOOLEAN NOT NULL DEFAULT FALSE
     `);
 
     // --- Panel ↔ Analyte map
@@ -77,7 +81,7 @@ const ensureSchema = async () => {
       )
     `);
 
-    // --- Lookup tables
+    // --- Config Tables
     await pool.query(`
       CREATE TABLE IF NOT EXISTS departments (
         id SERIAL PRIMARY KEY,
@@ -105,7 +109,6 @@ const ensureSchema = async () => {
       )
     `);
 
-    // ✅ --- FIX: Add schema for UNITS table --- ✅
     await pool.query(`
       CREATE TABLE IF NOT EXISTS units (
         id SERIAL PRIMARY KEY,
@@ -123,8 +126,6 @@ const ensureSchema = async () => {
         ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
     `);
-    // ✅ --- END OF FIX --- ✅
-
 
     schemaInitialized = true;
   } catch (err) {
@@ -138,11 +139,28 @@ const toNumberOrNull = (v) =>
   v === undefined || v === null || v === "" ? null : Number(v);
 
 // =============================================================
-// 💰 PRICE RECALCULATION HELPER
+// 💰 PRICE CALCULATION HELPERS
 // =============================================================
+
+/**
+ * Calculate total price from a list of analyte IDs (Used during creation/update)
+ */
+const calculatePanelPrice = async (client, analyteIds) => {
+  if (!analyteIds || analyteIds.length === 0) return 0;
+  
+  // Fetch prices for all selected analytes
+  const { rows } = await client.query(
+    `SELECT COALESCE(SUM(price), 0) as total 
+     FROM test_catalog 
+     WHERE id = ANY($1::int[])`,
+    [analyteIds]
+  );
+  return Number(rows[0].total) || 0;
+};
+
 /**
  * Internal helper to recalculate and update a panel's price
- * from the sum of its analytes.
+ * from the sum of its existing database links.
  */
 const _recalculatePanelPrice = async (panelId) => {
   try {
@@ -185,20 +203,25 @@ const getAllTests = async (req, res) => {
       SELECT 
         tc.id,
         tc.name AS test_name,
+        tc.name, -- alias for compatibility
         tc.price,
+        tc.price_is_dynamic,
+        tc.test_type,
+        tc.qualitative_value,
         tc.is_active,
         tc.is_panel,
         tc.department_id,
         tc.sample_type_id,
         tc.unit_id,
         COALESCE(u.symbol, '') AS unit_symbol,
+        COALESCE(u.unit_name, '') AS unit_name,
         COALESCE(d.name, 'General') AS department,
         COALESCE(st.name, '') AS sample_type
       FROM test_catalog tc
       LEFT JOIN units u ON u.id = tc.unit_id
       LEFT JOIN departments d ON d.id = tc.department_id
       LEFT JOIN sample_types st ON st.id = tc.sample_type_id
-      ORDER BY tc.name
+      ORDER BY tc.id DESC
     `);
 
     res.json({ success: true, data: rows });
@@ -240,7 +263,7 @@ const getAnalytes = async (req, res) => {
 };
 
 const createAnalyte = async (req, res) => {
-  const { name, price, department_id, sample_type_id, unit_id } = req.body;
+  const { name, price, department_id, sample_type_id, unit_id, test_type, qualitative_value } = req.body;
 
   if (!name) {
     return res
@@ -254,9 +277,9 @@ const createAnalyte = async (req, res) => {
     const { rows } = await pool.query(
       `
       INSERT INTO test_catalog 
-        (name, price, is_active, is_panel, department_id, sample_type_id, unit_id, created_at, updated_at)
+        (name, price, is_active, is_panel, department_id, sample_type_id, unit_id, test_type, qualitative_value, created_at, updated_at)
       VALUES
-        ($1, $2, TRUE, FALSE, $3, $4, $5, NOW(), NOW())
+        ($1, $2, TRUE, FALSE, $3, $4, $5, $6, $7, NOW(), NOW())
       ON CONFLICT (name) DO NOTHING
       RETURNING *
       `,
@@ -266,6 +289,8 @@ const createAnalyte = async (req, res) => {
         toNumberOrNull(department_id),
         toNumberOrNull(sample_type_id),
         toNumberOrNull(unit_id),
+        test_type || 'quantitative',
+        qualitative_value
       ]
     );
 
@@ -288,8 +313,7 @@ const createAnalyte = async (req, res) => {
 
 const updateAnalyte = async (req, res) => {
   const { id } = req.params;
-  const { name, price, department_id, sample_type_id, unit_id, is_active } =
-    req.body;
+  const { name, price, department_id, sample_type_id, unit_id, is_active, test_type, qualitative_value } = req.body;
 
   try {
     await ensureSchema();
@@ -304,8 +328,10 @@ const updateAnalyte = async (req, res) => {
         sample_type_id = COALESCE($4, sample_type_id),
         unit_id = COALESCE($5, unit_id),
         is_active = COALESCE($6, is_active),
+        test_type = COALESCE($7, test_type),
+        qualitative_value = COALESCE($8, qualitative_value),
         updated_at = NOW()
-      WHERE id = $7 AND is_panel = FALSE
+      WHERE id = $9 AND is_panel = FALSE
       RETURNING *
       `,
       [
@@ -315,6 +341,8 @@ const updateAnalyte = async (req, res) => {
         toNumberOrNull(sample_type_id),
         toNumberOrNull(unit_id),
         typeof is_active === "boolean" ? is_active : null,
+        test_type,
+        qualitative_value,
         id,
       ]
     );
@@ -333,7 +361,7 @@ const updateAnalyte = async (req, res) => {
         SELECT tpa.panel_id
         FROM test_panel_analytes tpa
         JOIN test_catalog panel ON tpa.panel_id = panel.id
-        WHERE tpa.analyte_id = $1 AND panel.panel_auto_recalc = TRUE
+        WHERE tpa.analyte_id = $1 AND (panel.panel_auto_recalc = TRUE OR panel.price_is_dynamic = TRUE)
         `,
         [id]
       );
@@ -350,6 +378,23 @@ const updateAnalyte = async (req, res) => {
     });
   } catch (err) {
     sendError(res, "updateAnalyte", err, "Failed to update analyte");
+  }
+};
+
+// TOGGLE STATUS (Generic for Tests and Panels)
+const toggleTestStatus = async (req, res) => {
+  const { id } = req.params;
+  const { is_active } = req.body;
+  try {
+    const result = await pool.query(
+      "UPDATE test_catalog SET is_active = $1 WHERE id = $2 RETURNING *",
+      [is_active, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ success: false, message: "Test not found" });
+    
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    sendError(res, "toggleStatus", err, "Failed to toggle status");
   }
 };
 
@@ -466,12 +511,23 @@ const getPanels = async (req, res) => {
         tc.name,
         tc.department_id,
         tc.price,
+        tc.price_is_dynamic,
         tc.is_active,
         tc.panel_auto_recalc,
-        COALESCE(d.name, 'General') AS department_name
+        tc.description,
+        COALESCE(d.name, 'General') AS department_name,
+        COALESCE(
+          json_agg(
+            json_build_object('id', a.id, 'name', a.name, 'price', a.price)
+          ) FILTER (WHERE a.id IS NOT NULL), 
+          '[]'
+        ) as analytes
       FROM test_catalog tc
       LEFT JOIN departments d ON d.id = tc.department_id
+      LEFT JOIN test_panel_analytes tpa ON tc.id = tpa.panel_id
+      LEFT JOIN test_catalog a ON tpa.analyte_id = a.id
       WHERE tc.is_panel = TRUE
+      GROUP BY tc.id, d.name
       ORDER BY tc.name
     `);
 
@@ -482,7 +538,7 @@ const getPanels = async (req, res) => {
 };
 
 const createPanel = async (req, res) => {
-  const { name, department_id, price, panel_auto_recalc } = req.body;
+  const { name, department_id, price, panel_auto_recalc, price_is_dynamic, analyte_ids, description } = req.body;
 
   if (!name) {
     return res
@@ -490,32 +546,59 @@ const createPanel = async (req, res) => {
       .json({ success: false, message: "Panel name is required" });
   }
 
+  const client = await pool.connect();
   try {
     await ensureSchema();
+    await client.query('BEGIN');
 
-    const { rows } = await pool.query(
+    // 1. Determine Final Price
+    let finalPrice = Number(price) || 0;
+    
+    // If price is dynamic, calculate sum of analytes
+    if (price_is_dynamic === true && analyte_ids && analyte_ids.length > 0) {
+       finalPrice = await calculatePanelPrice(client, analyte_ids);
+    }
+
+    const { rows } = await client.query(
       `
       INSERT INTO test_catalog
-        (name, department_id, price, is_active, is_panel, panel_auto_recalc, created_at, updated_at)
+        (name, department_id, price, price_is_dynamic, is_active, is_panel, panel_auto_recalc, description, created_at, updated_at)
       VALUES
-        ($1, $2, $3, TRUE, TRUE, COALESCE($4, FALSE), NOW(), NOW())
+        ($1, $2, $3, $4, TRUE, TRUE, COALESCE($5, FALSE), $6, NOW(), NOW())
       ON CONFLICT (name) DO NOTHING
       RETURNING *
       `,
       [
         name,
         toNumberOrNull(department_id),
-        toNumberOrNull(price) ?? 0,
+        finalPrice,
+        !!price_is_dynamic,
         !!panel_auto_recalc,
+        description
       ]
     );
 
     if (rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(409).json({
         success: false,
         message: "❗ Panel with this name already exists",
       });
     }
+
+    const panelId = rows[0].id;
+
+    // 3. Link Analytes
+    if (analyte_ids && analyte_ids.length > 0) {
+      for (const analyteId of analyte_ids) {
+        await client.query(
+          `INSERT INTO test_panel_analytes (panel_id, analyte_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [panelId, analyteId]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
 
     res.status(201).json({
       success: true,
@@ -523,51 +606,87 @@ const createPanel = async (req, res) => {
       data: rows[0],
     });
   } catch (err) {
+    await client.query('ROLLBACK');
     sendError(res, "createPanel", err, "Failed to create panel");
+  } finally {
+    client.release();
   }
 };
 
 const updatePanel = async (req, res) => {
   const { id } = req.params;
-  const { name, price, department_id, is_active, panel_auto_recalc } = req.body;
+  const { name, price, department_id, is_active, panel_auto_recalc, price_is_dynamic, analyte_ids, description } = req.body;
 
+  const client = await pool.connect();
   try {
     await ensureSchema();
+    await client.query('BEGIN');
 
-    const { rows } = await pool.query(
+    // 1. Determine Final Price (Recalculate if Dynamic)
+    let finalPrice = Number(price) || 0;
+    
+    // If price_is_dynamic is explicitly set to true, force calculation
+    if (price_is_dynamic === true && analyte_ids && analyte_ids.length > 0) {
+       finalPrice = await calculatePanelPrice(client, analyte_ids);
+    } else if (price_is_dynamic === undefined) {
+        // Use existing price if undefined
+        const current = await client.query('SELECT price_is_dynamic, price FROM test_catalog WHERE id = $1', [id]);
+        if (current.rows[0]?.price_is_dynamic && analyte_ids) {
+             finalPrice = await calculatePanelPrice(client, analyte_ids);
+        } else {
+             finalPrice = price !== undefined ? price : current.rows[0]?.price;
+        }
+    }
+
+    const { rows } = await client.query(
       `
       UPDATE test_catalog
       SET
         name = COALESCE($1, name),
-        price = COALESCE($2, price),
+        price = $2,
         department_id = COALESCE($3, department_id),
         is_active = COALESCE($4, is_active),
         panel_auto_recalc = COALESCE($5, panel_auto_recalc),
+        price_is_dynamic = COALESCE($6, price_is_dynamic),
+        description = COALESCE($7, description),
         updated_at = NOW()
-      WHERE id = $6 AND is_panel = TRUE
+      WHERE id = $8 AND is_panel = TRUE
       RETURNING *
       `,
       [
         name || null,
-        toNumberOrNull(price),
+        finalPrice,
         toNumberOrNull(department_id),
         typeof is_active === "boolean" ? is_active : null,
         typeof panel_auto_recalc === "boolean" ? panel_auto_recalc : null,
+        typeof price_is_dynamic === "boolean" ? price_is_dynamic : null,
+        description,
         id,
       ]
     );
 
     if (rows.length === 0) {
+      await client.query('ROLLBACK');
       return res
         .status(404)
         .json({ success: false, message: "Panel not found" });
     }
 
-    // If the frontend explicitly sets panel_auto_recalc true,
-    // recompute the price from analytes immediately
-    if (panel_auto_recalc === true) {
-      await _recalculatePanelPrice(id);
+    // 3. Update Links
+    if (analyte_ids) {
+      await client.query(`DELETE FROM test_panel_analytes WHERE panel_id = $1`, [id]);
+      
+      if (analyte_ids.length > 0) {
+        for (const analyteId of analyte_ids) {
+          await client.query(
+            `INSERT INTO test_panel_analytes (panel_id, analyte_id) VALUES ($1, $2)`,
+            [id, analyteId]
+          );
+        }
+      }
     }
+
+    await client.query('COMMIT');
 
     res.json({
       success: true,
@@ -575,7 +694,10 @@ const updatePanel = async (req, res) => {
       data: rows[0],
     });
   } catch (err) {
+    await client.query('ROLLBACK');
     sendError(res, "updatePanel", err, "Failed to update panel");
+  } finally {
+    client.release();
   }
 };
 
@@ -667,17 +789,17 @@ const addPanelAnalyte = async (req, res) => {
       [id, analyteId]
     );
 
-    // Auto recalc if enabled
+    // Auto recalc if enabled OR price is dynamic
     const { rows: p } = await pool.query(
       `
-      SELECT panel_auto_recalc
+      SELECT panel_auto_recalc, price_is_dynamic
       FROM test_catalog
       WHERE id = $1 AND is_panel = TRUE
       `,
       [id]
     );
 
-    if (p[0]?.panel_auto_recalc) {
+    if (p[0]?.panel_auto_recalc || p[0]?.price_is_dynamic) {
       await _recalculatePanelPrice(id);
     }
 
@@ -714,14 +836,14 @@ const removePanelAnalyte = async (req, res) => {
     // Auto recalc if enabled
     const { rows: p } = await pool.query(
       `
-      SELECT panel_auto_recalc
+      SELECT panel_auto_recalc, price_is_dynamic
       FROM test_catalog
       WHERE id = $1 AND is_panel = TRUE
       `,
       [panelId]
     );
 
-    if (p[0]?.panel_auto_recalc) {
+    if (p[0]?.panel_auto_recalc || p[0]?.price_is_dynamic) {
       await _recalculatePanelPrice(panelId);
     }
 
@@ -1062,20 +1184,14 @@ const getAllUnits = async (req, res) => {
       ORDER BY symbol
     `);
     
-    // ✅ FIX: Return the array directly, not nested
     res.json(rows);
   } catch (err) {
     sendError(res, "getAllUnits", err, "Failed to fetch units");
   }
 };
 
-// 🚀 --- ADDING NEW FUNCTIONS FOR UNITS --- 🚀
+// 🚀 --- NEW FUNCTIONS FOR UNITS --- 🚀
 
-/**
- * @desc    Create a new unit
- * @route   POST /api/lab-config/units
- * @access  Private (Admin)
- */
 const createUnit = async (req, res) => {
   const { unit_name, symbol, description } = req.body;
 
@@ -1114,11 +1230,6 @@ const createUnit = async (req, res) => {
   }
 };
 
-/**
- * @desc    Update a unit
- * @route   PUT /api/lab-config/units/:id
- * @access  Private (Admin)
- */
 const updateUnit = async (req, res) => {
   const { id } = req.params;
   const { unit_name, symbol, description } = req.body;
@@ -1155,11 +1266,6 @@ const updateUnit = async (req, res) => {
   }
 };
 
-/**
- * @desc    Delete a unit
- * @route   DELETE /api/lab-config/units/:id
- * @access  Private (Admin)
- */
 const deleteUnit = async (req, res) => {
   const { id } = req.params;
 
@@ -1203,7 +1309,6 @@ const getDepartments = async (req, res) => {
       ORDER BY name
     `);
 
-    // ✅ FIX: Return the array directly
     res.json(rows);
   } catch (err) {
     sendError(res, "getDepartments", err, "Failed to fetch departments");
@@ -1266,7 +1371,7 @@ const updateDepartment = async (req, res) => {
 
     if (!rows.length) {
       return res
-        .status(404) // ✅ FIX: Was 44, changed to 404
+        .status(404) 
         .json({ success: false, message: "Department not found" });
     }
 
@@ -1312,7 +1417,6 @@ const getSampleTypes = async (req, res) => {
       ORDER BY name
     `);
 
-    // ✅ FIX: Return the array directly
     res.json(rows);
   } catch (err) {
     sendError(res, "getSampleTypes", err, "Failed to fetch sample types");
@@ -1350,7 +1454,7 @@ const createSampleType = async (req, res) => {
       success: true,
       data: rows[0],
       message: "✅ Sample type created",
-    });
+      });
   } catch (err) {
     sendError(res, "createSampleType", err, "Failed to create sample type");
   }
@@ -1421,11 +1525,40 @@ const getWards = async (req, res) => {
       ORDER BY name
     `);
 
-    res.json(rows); // ✅ FIX: Return the array directly
+    res.json(rows); 
   } catch (err) {
     sendError(res, "getWards", err, "Failed to fetch wards");
   }
 };
+
+const createWard = async (req, res) => {
+  const { name } = req.body;
+  try {
+    const result = await pool.query(
+      "INSERT INTO wards (name) VALUES ($1) RETURNING *",
+      [name]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) { sendError(res, "createWard", err); }
+};
+
+const updateWard = async (req, res) => {
+  const { id } = req.params;
+  const { name } = req.body;
+  try {
+    await pool.query("UPDATE wards SET name = $1 WHERE id = $2", [name, id]);
+    res.json({ message: "Ward updated" });
+  } catch (err) { sendError(res, "updateWard", err); }
+};
+
+const deleteWard = async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query("DELETE FROM wards WHERE id = $1", [id]);
+    res.json({ message: "Ward deleted" });
+  } catch (err) { sendError(res, "deleteWard", err); }
+};
+
 
 // =============================================================
 // ✅ EXPORT MODULE
@@ -1437,6 +1570,7 @@ module.exports = {
   createAnalyte,
   updateAnalyte,
   deleteAnalyte,
+  toggleTestStatus,
 
   // 🧩 Panels
   getPanels,
@@ -1460,9 +1594,9 @@ module.exports = {
 
   // ⚙️ Config Tables
   getAllUnits,
-  createUnit,   // ✅ ADDED
-  updateUnit,   // ✅ ADDED
-  deleteUnit,   // ✅ ADDED
+  createUnit,   
+  updateUnit,   
+  deleteUnit,   
 
   // Departments
   getDepartments,
@@ -1478,4 +1612,7 @@ module.exports = {
 
   // Wards
   getWards,
+  createWard,
+  updateWard,
+  deleteWard,
 };

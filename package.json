@@ -6,6 +6,7 @@
     "react-barcode": "^1.6.1",
     "react-hotkeys-hook": "^5.2.1",
     "react-window": "^2.2.3",
-    "react-window-infinite-loader": "^2.0.0"
+    "react-window-infinite-loader": "^2.0.0",
+    "recharts": "^3.4.1"
   }
 }

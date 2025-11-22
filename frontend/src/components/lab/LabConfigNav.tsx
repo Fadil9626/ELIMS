@@ -1,6 +1,7 @@
 import React from "react";
 import { NavLink } from "react-router-dom";
-import { Layers, FlaskConical, Ruler, Building2 } from "lucide-react";
+// Added 'Beaker' to imports
+import { Layers, FlaskConical, Ruler, Building2, Beaker } from "lucide-react";
 
 const LabConfigNav: React.FC = () => {
   const base =
@@ -13,6 +14,17 @@ const LabConfigNav: React.FC = () => {
 
   return (
     <nav className="flex gap-2 border-b border-gray-200 pb-2 mb-6 overflow-x-auto">
+      {/* ✅ ADDED: Link to Tests Configuration */}
+      <NavLink
+        to="/admin/lab-config/tests"
+        className={({ isActive }) =>
+          `${base} ${isActive ? active : inactive}`
+        }
+      >
+        <Beaker size={16} />
+        Tests
+      </NavLink>
+
       <NavLink
         to="/admin/lab-config/panels"
         className={({ isActive }) =>
