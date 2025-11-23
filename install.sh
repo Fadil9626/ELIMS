@@ -46,6 +46,8 @@
 
 #!/bin/bash
 
+#!/bin/bash
+
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -57,10 +59,28 @@ echo -e "${GREEN}========================================================${NC}"
 echo -e "${GREEN}     ELIMS AUTOMATED INSTALLER (Linux + Admin Setup)${NC}"
 echo -e "${GREEN}========================================================${NC}"
 
-# 1. Check Docker
+# 1. Check Docker & Auto-Install
 if ! command -v docker &> /dev/null; then
-    echo -e "${RED}Error: Docker is not installed.${NC}"
-    exit 1
+    echo -e "${YELLOW}[!] Docker is not found on this system.${NC}"
+    read -p "Do you want to install Docker automatically? (y/n): " INSTALL_CONFIRM
+    
+    if [[ "$INSTALL_CONFIRM" =~ ^[Yy]$ ]]; then
+        echo -e "${BLUE}[INFO] Downloading and installing Docker...${NC}"
+        curl -fsSL https://get.docker.com -o get-docker.sh
+        sudo sh get-docker.sh
+        
+        # Add current user to docker group so sudo isn't needed later
+        echo -e "${BLUE}[INFO] Adding current user to Docker group...${NC}"
+        sudo usermod -aG docker $USER
+        
+        echo -e "${GREEN}[OK] Docker installed successfully!${NC}"
+        echo -e "${YELLOW}[IMPORTANT] You may need to log out and log back in for permissions to take effect.${NC}"
+        echo -e "${YELLOW}If the script fails after this, just run it again.${NC}"
+        rm get-docker.sh
+    else
+        echo -e "${RED}[ERROR] Docker is required. Please install it manually.${NC}"
+        exit 1
+    fi
 fi
 
 # 2. Config Environment
@@ -82,22 +102,27 @@ fi
 
 # 4. Build and Start
 echo -e "${BLUE}[INFO] Building and Starting System...${NC}"
-if command -v docker-compose &> /dev/null; then
+# Use standard 'docker compose' if available (preferred in new versions)
+if docker compose version &> /dev/null; then
+    docker compose up -d --build
+elif command -v docker-compose &> /dev/null; then
     docker-compose up -d --build
 else
-    docker compose up -d --build
+    echo -e "${RED}[ERROR] Could not find 'docker compose' or 'docker-compose'.${NC}"
+    exit 1
 fi
 
 # 5. Wait for Database
 echo -e "${YELLOW}[INFO] Waiting for Database to be ready...${NC}"
 # Loop until the database is ready to accept connections
+# We use a loop here because the DB takes time to initialize on first run
 until docker exec elims_db pg_isready -U postgres > /dev/null 2>&1; do
   echo -n "."
   sleep 2
 done
 echo -e "\n${GREEN}[OK] Database is up!${NC}"
 
-# Give it a few more seconds for tables to settle if they are being restored
+# Give it a few more seconds for tables to settle
 sleep 5
 
 # 6. CREATE SUPER ADMIN
