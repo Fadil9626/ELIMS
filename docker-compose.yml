@@ -1,4 +1,4 @@
-
+version: "3.9"
 
 networks:
   elims_net:
@@ -32,7 +32,7 @@ services:
       - elims_net
 
   # ===========================================================
-  # ⚙️ Backend API (CORS Updated)
+  # ⚙️ Backend API
   # ===========================================================
   api:
     build:
@@ -46,10 +46,11 @@ services:
     env_file:
       - .env
     environment:
+      # ✅ FIX: Force Development mode so cookies work over HTTP
+      NODE_ENV: development 
       PORT: 5000
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-Database}@db:5432/${POSTGRES_DB:-postgres}
       JWT_SECRET: ${JWT_SECRET:-securesecret}
-      # ✅ FIX: Added your computer's IP address so the backend accepts the connection
       CORS_ORIGIN: http://localhost:5173,http://localhost:8081,http://192.168.0.103:5173
     ports:
       - "5000:5000"
