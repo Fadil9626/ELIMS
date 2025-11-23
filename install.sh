@@ -46,10 +46,6 @@
 
 #!/bin/bash
 
-#!/bin/bash
-
-#!/bin/bash
-
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -110,6 +106,27 @@ else
     exit 1
 fi
 
+# ==========================================================
+# 4.5. Wait for API to be running (Triggers Migrations) - NEW FIX
+# ==========================================================
+echo -e "${YELLOW}[INFO] Waiting for API service to be running (triggers migrations)...${NC}"
+MAX_API_RETRIES=20
+API_COUNT=0
+API_SERVICE_NAME="elims_api" # Your container name
+
+until docker inspect -f '{{.State.Running}}' "$API_SERVICE_NAME" 2>/dev/null | grep -q true; do
+    echo -n "."
+    sleep 3
+    API_COUNT=$((API_COUNT+1))
+    if [ $API_COUNT -ge $MAX_API_RETRIES ]; then
+        echo -e "\n${RED}[ERROR] Timeout waiting for API container to start. Check API logs!${NC}"
+        # We continue to the DB check, which will likely fail, but gives diagnostic info
+        break
+    fi
+done
+echo -e "\n${GREEN}[OK] API Container is running.${NC}"
+
+
 # 5. Wait for Database (CONNECTION check)
 echo -e "${YELLOW}[INFO] Waiting for Database connection...${NC}"
 until docker exec elims_db pg_isready -U postgres > /dev/null 2>&1; do
@@ -118,7 +135,7 @@ until docker exec elims_db pg_isready -U postgres > /dev/null 2>&1; do
 done
 echo -e "\n${GREEN}[OK] Database Connection is up!${NC}"
 
-# 6. Wait for Tables (SCHEMA check) - NEW FIX
+# 6. Wait for Tables (SCHEMA check)
 echo -e "${YELLOW}[INFO] Waiting for database tables to be created (this may take time)...${NC}"
 MAX_RETRIES=30
 COUNT=0
@@ -134,7 +151,7 @@ while [ $COUNT -lt $MAX_RETRIES ]; do
 done
 
 if [ $COUNT -eq $MAX_RETRIES ]; then
-  echo -e "\n${RED}[ERROR] Timeout waiting for tables. Did you forget to put your backup.sql in ./docker/db-init?${NC}"
+  echo -e "\n${RED}[ERROR] Timeout waiting for tables. Did your API migrations fail?${NC}"
   # We don't exit here, we let it try (and likely fail) so you see the specific error
 fi
 
