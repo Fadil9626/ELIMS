@@ -9,7 +9,7 @@ volumes:
 
 services:
   # ===========================================================
-  # 🐘 Database (Auto-Restores your Backup)
+  # 🐘 Database
   # ===========================================================
   db:
     image: postgres:16-alpine
@@ -22,7 +22,6 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - elims_postgres_data:/var/lib/postgresql/data/pgdata
-      # 👇 THIS LINE AUTOMATICALLY INSTALLS YOUR SYSTEM CONFIG
       - ./docker/db-init:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -33,7 +32,7 @@ services:
       - elims_net
 
   # ===========================================================
-  # ⚙️ Backend API
+  # ⚙️ Backend API (CORS Updated)
   # ===========================================================
   api:
     build:
@@ -50,7 +49,8 @@ services:
       PORT: 5000
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-Database}@db:5432/${POSTGRES_DB:-postgres}
       JWT_SECRET: ${JWT_SECRET:-securesecret}
-      CORS_ORIGIN: http://localhost:5173,http://localhost:8081
+      # ✅ FIX: Added your computer's IP address so the backend accepts the connection
+      CORS_ORIGIN: http://localhost:5173,http://localhost:8081,http://192.168.0.103:5173
     ports:
       - "5000:5000"
     volumes:
@@ -59,7 +59,7 @@ services:
       - elims_net
 
   # ===========================================================
-  # 🖥️ Frontend (Production Build - No Vite Issues!)
+  # 🖥️ Frontend
   # ===========================================================
   web:
     build:
@@ -70,6 +70,6 @@ services:
     depends_on:
       - api
     ports:
-      - "5173:80" # Exposing on 5173 so it feels like dev but is stable prod
+      - "5173:80"
     networks:
       - elims_net
