@@ -7,10 +7,9 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
-# Ensure the build uses the correct API URL
-# NOTE: In Docker networking, the browser cannot access 'api' container by name.
-# It must access via the public IP/Port mapped in docker-compose (localhost:5000 or server IP).
-ENV VITE_API_URL=http://localhost:5000 
+
+# ✅ FIX: Removed the "ENV VITE_API_URL" line.
+# This forces the build to respect your empty .env file or api.js logic.
 RUN npm run build
 
 # Stage 2: Serve
