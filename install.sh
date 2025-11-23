@@ -48,6 +48,8 @@
 
 #!/bin/bash
 
+#!/bin/bash
+
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -56,7 +58,7 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}========================================================${NC}"
-echo -e "${GREEN}     ELIMS AUTOMATED INSTALLER (Linux + Admin Setup)${NC}"
+echo -e "${GREEN}     ELIMS AUTOMATED INSTALLER (Smart Check)${NC}"
 echo -e "${GREEN}========================================================${NC}"
 
 # 1. Check Docker & Auto-Install
@@ -64,23 +66,21 @@ if ! command -v docker &> /dev/null; then
     echo -e "${YELLOW}[!] Docker is not found on this system.${NC}"
     read -p "Do you want to install Docker automatically? (y/n): " INSTALL_CONFIRM
     
-    if [[ "$INSTALL_CONFIRM" =~ ^[Yy]$ ]]; then
-        echo -e "${BLUE}[INFO] Downloading and installing Docker...${NC}"
-        curl -fsSL https://get.docker.com -o get-docker.sh
-        sudo sh get-docker.sh
-        
-        # Add current user to docker group so sudo isn't needed later
-        echo -e "${BLUE}[INFO] Adding current user to Docker group...${NC}"
-        sudo usermod -aG docker $USER
-        
-        echo -e "${GREEN}[OK] Docker installed successfully!${NC}"
-        echo -e "${YELLOW}[IMPORTANT] You may need to log out and log back in for permissions to take effect.${NC}"
-        echo -e "${YELLOW}If the script fails after this, just run it again.${NC}"
-        rm get-docker.sh
-    else
-        echo -e "${RED}[ERROR] Docker is required. Please install it manually.${NC}"
-        exit 1
-    fi
+    case "$INSTALL_CONFIRM" in
+        [yY]|[yY][eE][sS])
+            echo -e "${BLUE}[INFO] Downloading and installing Docker...${NC}"
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sudo sh get-docker.sh
+            sudo usermod -aG docker $USER
+            echo -e "${GREEN}[OK] Docker installed successfully!${NC}"
+            echo -e "${YELLOW}[IMPORTANT] Log out and log back in to use Docker without sudo.${NC}"
+            rm get-docker.sh
+            ;;
+        *)
+            echo -e "${RED}[ERROR] Docker is required. Please install it manually.${NC}"
+            exit 1
+            ;;
+    esac
 fi
 
 # 2. Config Environment
@@ -93,7 +93,6 @@ fi
 
 # 3. Clean old containers
 echo -e "${YELLOW}[INFO] Cleaning up old installations...${NC}"
-# Check if docker-compose exists, otherwise use 'docker compose'
 if command -v docker-compose &> /dev/null; then
     docker-compose down -v --remove-orphans > /dev/null 2>&1
 else
@@ -102,7 +101,6 @@ fi
 
 # 4. Build and Start
 echo -e "${BLUE}[INFO] Building and Starting System...${NC}"
-# Use standard 'docker compose' if available (preferred in new versions)
 if docker compose version &> /dev/null; then
     docker compose up -d --build
 elif command -v docker-compose &> /dev/null; then
@@ -112,32 +110,45 @@ else
     exit 1
 fi
 
-# 5. Wait for Database
-echo -e "${YELLOW}[INFO] Waiting for Database to be ready...${NC}"
-# Loop until the database is ready to accept connections
-# We use a loop here because the DB takes time to initialize on first run
+# 5. Wait for Database (CONNECTION check)
+echo -e "${YELLOW}[INFO] Waiting for Database connection...${NC}"
 until docker exec elims_db pg_isready -U postgres > /dev/null 2>&1; do
   echo -n "."
   sleep 2
 done
-echo -e "\n${GREEN}[OK] Database is up!${NC}"
+echo -e "\n${GREEN}[OK] Database Connection is up!${NC}"
 
-# Give it a few more seconds for tables to settle
-sleep 5
+# 6. Wait for Tables (SCHEMA check) - NEW FIX
+echo -e "${YELLOW}[INFO] Waiting for database tables to be created (this may take time)...${NC}"
+MAX_RETRIES=30
+COUNT=0
+while [ $COUNT -lt $MAX_RETRIES ]; do
+  # Check if the 'users' table exists yet
+  if docker exec elims_db psql -U postgres -d postgres -c "SELECT 1 FROM users LIMIT 1;" > /dev/null 2>&1; then
+    echo -e "${GREEN}[OK] Tables found!${NC}"
+    break
+  fi
+  echo -n "."
+  sleep 2
+  COUNT=$((COUNT+1))
+done
 
-# 6. CREATE SUPER ADMIN
+if [ $COUNT -eq $MAX_RETRIES ]; then
+  echo -e "\n${RED}[ERROR] Timeout waiting for tables. Did you forget to put your backup.sql in ./docker/db-init?${NC}"
+  # We don't exit here, we let it try (and likely fail) so you see the specific error
+fi
+
+# 7. CREATE SUPER ADMIN
 echo -e "${GREEN}========================================================${NC}"
 echo -e "${GREEN}     CREATE SUPER ADMIN ACCOUNT${NC}"
 echo -e "${GREEN}========================================================${NC}"
 
 read -p "Enter Admin Email: " ADMIN_EMAIL
 read -s -p "Enter Admin Password: " ADMIN_PASS
-echo "" # New line after password
+echo "" 
 
 echo -e "${YELLOW}[INFO] Creating account for $ADMIN_EMAIL...${NC}"
 
-# We use pgcrypto to generate a bcrypt hash compatible with Node.js
-# This command enables the extension and inserts/updates the user
 docker exec elims_db psql -U postgres -d postgres -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;" > /dev/null 2>&1
 
 docker exec elims_db psql -U postgres -d postgres -c "
@@ -150,7 +161,7 @@ DO UPDATE SET password_hash = crypt('$ADMIN_PASS', gen_salt('bf')), is_active = 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}[SUCCESS] Super Admin created successfully!${NC}"
 else
-    echo -e "${RED}[ERROR] Failed to create user. Check if the database tables exist.${NC}"
+    echo -e "${RED}[ERROR] Failed to create user. Verify your database tables exist.${NC}"
 fi
 
 echo -e "${GREEN}========================================================${NC}"
